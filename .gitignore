@@ -1,0 +1,29 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- Android / Gradle ----
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+*.iml
+.idea/
+
+# ---- macOS / Xcode (para el port iOS) ----
+.DS_Store
+ios/build/
+ios/DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+ios/**/*.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# ---- Varios ----
+*.log
+.env
