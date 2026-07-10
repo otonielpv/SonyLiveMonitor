@@ -7,7 +7,7 @@ Componentes:
 
 - **App Android nativa** (`android/`) — el monitor definitivo para el movil.
   Validada en una a6000 real: ~25 fps con ~5 ms de edad de frame.
-- **App iOS** (`ios/`, SwiftUI) — port en curso para iPhone.
+- **App iOS** (`ios/`, SwiftUI) — port completo de la app Android para iPhone.
 - **Prototipo de escritorio en Python** (raiz) — util para diagnostico y
   desarrollo desde el PC.
 
@@ -33,6 +33,33 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Uso: camara en "Ctrl. con smartphone", movil conectado a la WiFi
 `DIRECT-xxxx:ILCE-6000`, abrir la app. Se reconecta sola.
+
+## App iOS
+
+Port 1:1 de la app Android en SwiftUI (`ios/SonyLiveMonitor.xcodeproj`):
+mismo lector de liveview anti-lag (socket crudo con `TCP_NODELAY`, solo se
+conserva el frame mas reciente), mismos controles (ISO, velocidad, apertura,
+enfoque, flash, temporizador, EV, WB, modo foto/video), zoom motorizado,
+enfoque tactil, cuadriculas, HUD, medidor de exposicion y disparador
+flotante arrastrable.
+
+Diferencias respecto a Android:
+
+- iOS no permite a una app unirse a una WiFi por si sola: hay que conectarse
+  una vez a la red `DIRECT-xxxx` de la camara desde Ajustes > WiFi (el boton
+  "WiFi" de la app muestra las instrucciones). Despues la reconexion es
+  automatica.
+- La primera vez iOS pide permiso de "red local" — hay que aceptarlo o la
+  camara no sera alcanzable.
+
+Compilar e instalar en un iPhone:
+
+1. Abrir `ios/SonyLiveMonitor.xcodeproj` en Xcode.
+2. En el target, ajustar el Team de firma (Signing & Capabilities) a tu
+   Apple ID personal.
+3. Seleccionar el iPhone como destino y Run. Con cuenta gratuita, la
+   primera vez hay que confiar en el perfil en el iPhone
+   (Ajustes > General > Gestion de dispositivos).
 
 ## Prototipo de escritorio (Python)
 
