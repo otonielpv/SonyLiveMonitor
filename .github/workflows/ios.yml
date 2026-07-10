@@ -1,0 +1,91 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necesario para adjuntar el IPA a la Release
+
+env:
+  PROJECT: ios/SonyLiveMonitor.xcodeproj
+  SCHEME: SonyLiveMonitor
+  CONFIGURATION: Release
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seleccionar Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Mostrar version de Xcode
+        run: xcodebuild -version
+
+      # El proyecto no versiona un scheme compartido; xcodebuild autogenera
+      # uno con el nombre del target, asi que -scheme SonyLiveMonitor funciona.
+      - name: Listar schemes
+        run: xcodebuild -project "$PROJECT" -list
+
+      - name: Compilar sin firmar (archive a .app)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build | xcpretty || \
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Empaquetar .app en .ipa sin firmar
+        id: ipa
+        run: |
+          APP_PATH=$(find build/Build/Products/${CONFIGURATION}-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "No se encontro el .app compilado"; exit 1
+          fi
+          echo "App compilada: $APP_PATH"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          VER="${GITHUB_REF_NAME}"
+          OUT="SonyLiveMonitor-${VER}-unsigned.ipa"
+          zip -qr "$OUT" Payload
+          rm -rf Payload
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          ls -lh "$OUT"
+
+      - name: Subir IPA como artefacto (siempre)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-unsigned
+          path: ${{ steps.ipa.outputs.path }}
+          if-no-files-found: error
+
+      - name: Adjuntar IPA a la Release (solo en tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.ipa.outputs.path }}
+          fail_on_unmatched_files: true

@@ -1,0 +1,65 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necesario para adjuntar el APK a la Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache de Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Dar permiso de ejecucion a gradlew
+        run: chmod +x gradlew
+
+      - name: Compilar APK debug
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Renombrar APK con la version
+        id: apk
+        run: |
+          SRC=app/build/outputs/apk/debug/app-debug.apk
+          VER="${GITHUB_REF_NAME}"
+          OUT="SonyLiveMonitor-${VER}.apk"
+          cp "$SRC" "$OUT"
+          echo "path=android/$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Subir APK como artefacto (siempre)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Adjuntar APK a la Release (solo en tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          fail_on_unmatched_files: true

@@ -1,0 +1,11 @@
+# Los scripts de shell (incluido el wrapper de Gradle) SIEMPRE con LF,
+# aunque se editen en Windows, o fallan en los runners Linux/macOS de la CI.
+*.sh    text eol=lf
+gradlew text eol=lf
+
+# Scripts de Windows con CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# El jar del wrapper es binario, que git no lo toque
+*.jar   binary
