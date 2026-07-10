@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.otoniel.sonymonitor"
+    namespace = "com.otoniel.sonylivemonitor"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.otoniel.sonymonitor"
+        applicationId = "com.otoniel.sonylivemonitor"
         minSdk = 24
         // targetSdk 28 a proposito: permite conectar a la WiFi de la camara
         // con la API legacy (WifiManager.enableNetwork), sin el dialogo de

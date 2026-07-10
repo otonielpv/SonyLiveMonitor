@@ -1,4 +1,4 @@
-package com.otoniel.sonymonitor
+package com.otoniel.sonylivemonitor
 
 import android.os.SystemClock
 import java.io.BufferedInputStream

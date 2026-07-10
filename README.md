@@ -1,16 +1,17 @@
-# SonyRemoteApp
+# SonyLiveMonitor
 
 Monitor en vivo de baja latencia para Sony a6000 (y otras camaras con la
 Sony Camera Remote API), pensado como alternativa ligera a Imaging Edge.
 
-Dos componentes:
+Componentes:
 
 - **App Android nativa** (`android/`) — el monitor definitivo para el movil.
   Validada en una a6000 real: ~25 fps con ~5 ms de edad de frame.
+- **App iOS** (`ios/`, SwiftUI) — port en curso para iPhone.
 - **Prototipo de escritorio en Python** (raiz) — util para diagnostico y
   desarrollo desde el PC.
 
-## App Android ("Sony Monitor")
+## App Android ("Sony Live Monitor")
 
 - Liveview a pantalla completa con HUD (fps, edad del frame, drops).
 - Cuadriculas configurables: tercios / tercios+diagonales / cruz (persistente).

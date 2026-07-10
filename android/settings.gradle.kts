@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SonyMonitor"
+rootProject.name = "SonyLiveMonitor"
 include(":app")

@@ -1,4 +1,4 @@
-package com.otoniel.sonymonitor
+package com.otoniel.sonylivemonitor
 
 import org.json.JSONArray
 import org.json.JSONObject
