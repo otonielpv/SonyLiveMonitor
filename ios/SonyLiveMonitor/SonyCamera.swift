@@ -23,13 +23,14 @@ enum SonyCamera {
 
     /// Llamada JSON-RPC sincrona: usar siempre fuera del hilo principal.
     @discardableResult
-    static func call(_ method: String, params: [Any] = [], endpoint: String = defaultEndpoint) throws -> [Any] {
+    static func call(_ method: String, params: [Any] = [], endpoint: String = defaultEndpoint,
+                     version: String = "1.0") throws -> [Any] {
         idLock.lock()
         nextId += 1
         let id = nextId
         idLock.unlock()
 
-        let payload: [String: Any] = ["method": method, "params": params, "id": id, "version": "1.0"]
+        let payload: [String: Any] = ["method": method, "params": params, "id": id, "version": version]
         guard let url = URL(string: endpoint) else { throw CameraError("bad endpoint: \(endpoint)") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

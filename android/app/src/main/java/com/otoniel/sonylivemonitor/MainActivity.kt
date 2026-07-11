@@ -50,7 +50,11 @@ class MainActivity : Activity() {
         val setMethod: String,
         val numeric: Boolean = false,  // el setter espera un numero, no un string
         val chipLabel: (String) -> String,
-    )
+    ) {
+        // getAvailableX sirve para construir el selector; getX devuelve el
+        // valor actual de forma fiable al iniciar la sesion.
+        val currentMethod: String get() = getMethod.replace("getAvailable", "get")
+    }
 
     private val settings = listOf(
         Setting("ISO", "getAvailableIsoSpeedRate", "setIsoSpeedRate") { "ISO $it" },
@@ -708,9 +712,16 @@ class MainActivity : Activity() {
                 "Timer" to "currentSelfTimer",
             )
             val currentByTitle = mutableMapOf<String, String>()
+            settings.forEach { setting ->
+                runCatching {
+                    currentByTitle[setting.title] = SonyCamera.call(
+                        SonyCamera.DEFAULT_ENDPOINT, setting.currentMethod,
+                    ).get(0).toString()
+                }
+            }
             runCatching {
                 val events = SonyCamera.call(
-                    SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false),
+                    SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false), version = "1.1",
                 )
                 for (i in 0 until events.length()) {
                     val event = events.optJSONObject(i) ?: continue

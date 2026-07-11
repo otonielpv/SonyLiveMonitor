@@ -14,12 +14,14 @@ object SonyCamera {
 
     private var nextId = 0
 
-    fun call(endpoint: String, method: String, params: JSONArray = JSONArray()): JSONArray {
+    fun call(
+        endpoint: String, method: String, params: JSONArray = JSONArray(), version: String = "1.0",
+    ): JSONArray {
         val payload = JSONObject()
             .put("method", method)
             .put("params", params)
             .put("id", ++nextId)
-            .put("version", "1.0")
+            .put("version", version)
 
         val conn = URL(endpoint).openConnection() as HttpURLConnection
         try {

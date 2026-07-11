@@ -82,6 +82,11 @@
 				TargetAttributes = {
 					989B1AAD30017207007C50F4 = {
 						CreatedOnToolsVersion = 16.4;
+						SystemCapabilities = {
+							com.apple.HotspotConfiguration = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};

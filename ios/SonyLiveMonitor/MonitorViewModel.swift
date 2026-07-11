@@ -29,6 +29,10 @@ struct CameraSetting: Identifiable {
     let setMethod: String
     var numeric = false  // el setter espera un numero, no un string
     let chipLabel: (String) -> String
+
+    /// getAvailableX devuelve valores editables; getX devuelve siempre el
+    /// valor actual y es mas fiable durante la inicializacion en la a6000.
+    var currentMethod: String { getMethod.replacingOccurrences(of: "getAvailable", with: "get") }
 }
 
 /// Tira horizontal de valores de un ajuste abierta en el panel.
@@ -189,7 +193,13 @@ final class MonitorViewModel: ObservableObject {
                     self.showConnectHelp = false
                 } else if let error {
                     self.wifiConnected = false
-                    self.wifiConnectionMessage = "Could not connect: \(error.localizedDescription)"
+                    let nsError = error as NSError
+                    if nsError.domain == NEHotspotConfigurationErrorDomain,
+                       nsError.code == NEHotspotConfigurationError.`internal`.rawValue {
+                        self.wifiConnectionMessage = "WiFi configuration error (code 8). Reinstall a build signed with the Hotspot Configuration capability. If it persists, make sure WiFi is enabled and restart the iPhone."
+                    } else {
+                        self.wifiConnectionMessage = "Could not connect [\(nsError.code)]: \(error.localizedDescription)"
+                    }
                 } else {
                     self.wifiConnected = true
                     self.wifiConnectionMessage = "Connected. The live view will start automatically."
@@ -578,11 +588,17 @@ final class MonitorViewModel: ObservableObject {
     /// Actualiza las etiquetas de los chips con los valores actuales de la camara.
     func refreshChips() {
         apiQueue.async {
+            var currentById: [String: String] = [:]
+            for setting in Self.settings {
+                if let result = try? SonyCamera.call(setting.currentMethod), let current = result.first {
+                    currentById[setting.id] = Self.stringify(current)
+                }
+            }
+
             // getEvent es la instantanea de estado de la API de Sony. En
             // algunas camaras los getAvailable* solo devuelven un valor util
             // despues de haber cambiado el ajuste desde el remoto.
-            var currentById: [String: String] = [:]
-            if let events = try? SonyCamera.call("getEvent", params: [false]) {
+            if let events = try? SonyCamera.call("getEvent", params: [false], version: "1.1") {
                 for case let event as [String: Any] in events {
                     let keys = [
                         "ISO": "currentIsoSpeedRate",
