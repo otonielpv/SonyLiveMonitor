@@ -696,10 +696,43 @@ class MainActivity : Activity() {
     /** Actualiza las etiquetas de los chips con los valores actuales de la camara. */
     private fun refreshChips() {
         apiExecutor.execute {
+            // getEvent es la instantanea real del estado. Algunos modelos no
+            // rellenan de forma fiable el primer elemento de getAvailable*
+            // hasta que el ajuste se cambia desde el remoto.
+            val eventKeys = mapOf(
+                "ISO" to "currentIsoSpeedRate",
+                "Shutter" to "currentShutterSpeed",
+                "Aperture" to "currentFNumber",
+                "Focus" to "currentFocusMode",
+                "Flash" to "currentFlashMode",
+                "Timer" to "currentSelfTimer",
+            )
+            val currentByTitle = mutableMapOf<String, String>()
+            runCatching {
+                val events = SonyCamera.call(
+                    SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false),
+                )
+                for (i in 0 until events.length()) {
+                    val event = events.optJSONObject(i) ?: continue
+                    eventKeys.forEach { (title, key) ->
+                        if (!currentByTitle.containsKey(title) && event.has(key) && !event.isNull(key)) {
+                            currentByTitle[title] = event.get(key).toString()
+                        }
+                    }
+                }
+            }
             settings.forEach { s ->
-                runCatching {
-                    val current = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, s.getMethod).getString(0)
-                    runOnUiThread { chips[s]?.text = s.chipLabel(current) }
+                if (!currentByTitle.containsKey(s.title)) {
+                    runCatching {
+                        currentByTitle[s.title] = SonyCamera.call(
+                            SonyCamera.DEFAULT_ENDPOINT, s.getMethod,
+                        ).get(0).toString()
+                    }
+                }
+            }
+            runOnUiThread {
+                settings.forEach { s ->
+                    currentByTitle[s.title]?.let { chips[s]?.text = s.chipLabel(it) }
                 }
             }
             runCatching {

@@ -86,6 +86,13 @@ final class MonitorViewModel: ObservableObject {
     private var focusGeneration = 0
     private var toastGeneration = 0
 
+    // Como maximo puede haber una actualizacion de video esperando en main.
+    // Sin esta coalescencia, una bajada puntual de rendimiento acumula un
+    // UIImage por frame y puede terminar agotando memoria y congelando la UI.
+    private let framePublishLock = NSLock()
+    private var framePublishScheduled = false
+    private var pendingFramePublish: (UIImage?, String?, String)?
+
     init() {
         rotation = defaults.integer(forKey: "rot")
         grid = GridMode(rawValue: defaults.integer(forKey: "grid")) ?? .off
@@ -224,7 +231,22 @@ final class MonitorViewModel: ObservableObject {
         let hud = ageMs >= 0
             ? String(format: "%.1f fps | age %d ms | drops %d", fps, ageMs, dropped)
             : String(format: "%.1f fps | drops %d", fps, dropped)
+
+        framePublishLock.lock()
+        pendingFramePublish = (image, alert, hud)
+        let shouldSchedule = !framePublishScheduled
+        if shouldSchedule { framePublishScheduled = true }
+        framePublishLock.unlock()
+        guard shouldSchedule else { return }
+
         DispatchQueue.main.async {
+            self.framePublishLock.lock()
+            let update = self.pendingFramePublish
+            self.pendingFramePublish = nil
+            self.framePublishScheduled = false
+            self.framePublishLock.unlock()
+
+            guard let (image, alert, hud) = update else { return }
             self.statusMessage = nil
             if let image { self.image = image }
             self.hudText = hud
@@ -486,12 +508,35 @@ final class MonitorViewModel: ObservableObject {
     /// Actualiza las etiquetas de los chips con los valores actuales de la camara.
     func refreshChips() {
         apiQueue.async {
-            for setting in Self.settings {
-                if let r = try? SonyCamera.call(setting.getMethod), let current = r.first {
-                    let label = setting.chipLabel(Self.stringify(current))
-                    DispatchQueue.main.async { self.chipLabels[setting.id] = label }
+            // getEvent es la instantanea de estado de la API de Sony. En
+            // algunas camaras los getAvailable* solo devuelven un valor util
+            // despues de haber cambiado el ajuste desde el remoto.
+            var currentById: [String: String] = [:]
+            if let events = try? SonyCamera.call("getEvent", params: [false]) {
+                for case let event as [String: Any] in events {
+                    let keys = [
+                        "ISO": "currentIsoSpeedRate",
+                        "Shutter": "currentShutterSpeed",
+                        "Aperture": "currentFNumber",
+                        "Focus": "currentFocusMode",
+                        "Flash": "currentFlashMode",
+                        "Timer": "currentSelfTimer",
+                    ]
+                    for (id, key) in keys where currentById[id] == nil {
+                        if let value = event[key] { currentById[id] = Self.stringify(value) }
+                    }
                 }
             }
+            for setting in Self.settings {
+                if currentById[setting.id] == nil,
+                   let r = try? SonyCamera.call(setting.getMethod), let current = r.first {
+                    currentById[setting.id] = Self.stringify(current)
+                }
+            }
+            let labels = Dictionary(uniqueKeysWithValues: Self.settings.compactMap { setting in
+                currentById[setting.id].map { (setting.id, setting.chipLabel($0)) }
+            })
+            DispatchQueue.main.async { self.chipLabels.merge(labels) { _, new in new } }
             if let r = try? SonyCamera.call("getAvailableExposureCompensation"), r.count >= 4,
                let cur = (r[0] as? NSNumber)?.intValue,
                let stepIndex = (r[3] as? NSNumber)?.intValue {
