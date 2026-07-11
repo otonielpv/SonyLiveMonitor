@@ -38,6 +38,7 @@ import org.json.JSONArray
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
@@ -68,6 +69,7 @@ class MainActivity : Activity() {
     private lateinit var surface: SurfaceView
     private lateinit var connectivity: ConnectivityManager
     private val apiExecutor = Executors.newSingleThreadExecutor()
+    private val exposureRefreshPending = AtomicBoolean(false)
 
     @Volatile private var active = false
     private var worker: Thread? = null
@@ -765,6 +767,57 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Mantiene ISO, shutter y apertura sincronizados con los diales fisicos. */
+    private fun refreshExposureChips() {
+        if (!exposureRefreshPending.compareAndSet(false, true)) return
+        apiExecutor.execute {
+            try {
+                val exposureSettings = settings.filter {
+                    it.title == "ISO" || it.title == "Shutter" || it.title == "Aperture"
+                }
+                val values = mutableMapOf<String, String>()
+                runCatching {
+                    val events = SonyCamera.call(
+                        SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false), version = "1.1",
+                    )
+                    val keys = mapOf(
+                        "ISO" to "currentIsoSpeedRate",
+                        "Shutter" to "currentShutterSpeed",
+                        "Aperture" to "currentFNumber",
+                    )
+                    for (i in 0 until events.length()) {
+                        val event = events.optJSONObject(i) ?: continue
+                        keys.forEach { (title, key) ->
+                            if (!values.containsKey(title) && event.has(key) && !event.isNull(key)) {
+                                values[title] = event.get(key).toString()
+                            }
+                        }
+                    }
+                }
+                exposureSettings.forEach { setting ->
+                    if (!values.containsKey(setting.title)) {
+                        runCatching {
+                            values[setting.title] = SonyCamera.call(
+                                SonyCamera.DEFAULT_ENDPOINT, setting.currentMethod,
+                            ).get(0).toString()
+                        }.recoverCatching {
+                            values[setting.title] = SonyCamera.call(
+                                SonyCamera.DEFAULT_ENDPOINT, setting.getMethod,
+                            ).get(0).toString()
+                        }
+                    }
+                }
+                runOnUiThread {
+                    exposureSettings.forEach { setting ->
+                        values[setting.title]?.let { chips[setting]?.text = setting.chipLabel(it) }
+                    }
+                }
+            } finally {
+                exposureRefreshPending.set(false)
+            }
+        }
+    }
+
     private fun takePicture() {
         if (shootMode == "movie") {
             // En modo video el disparador inicia/detiene la grabacion
@@ -1049,6 +1102,7 @@ class MainActivity : Activity() {
         var lastFrameAt = SystemClock.elapsedRealtime()
         var exposure: Exposure? = null
         var lastMeterAt = 0L
+        var lastCameraStateAt = 0L
 
         try {
             while (active) {
@@ -1093,6 +1147,10 @@ class MainActivity : Activity() {
                 }
 
                 val ageMs = SystemClock.elapsedRealtime() - frame.receivedAtMs
+                if (now - lastCameraStateAt >= 1000) {
+                    lastCameraStateAt = now
+                    refreshExposureChips()
+                }
                 // El analisis de exposicion es caro: muestrear ~7 veces/s basta
                 exposure = when {
                     !meterOn -> null

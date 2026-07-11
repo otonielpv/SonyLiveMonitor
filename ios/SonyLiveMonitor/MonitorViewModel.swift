@@ -1,6 +1,5 @@
 import UIKit
 import Combine
-import NetworkExtension
 
 enum GridMode: Int, CaseIterable {
     case off, thirds, thirdsDiag, cross
@@ -79,9 +78,6 @@ final class MonitorViewModel: ObservableObject {
     @Published var shootMode = "still"
     @Published var movieRecording = false
     @Published var showConnectHelp = false
-    @Published var wifiConnecting = false
-    @Published var wifiConnected = false
-    @Published var wifiConnectionMessage: String?
 
     private let apiQueue = DispatchQueue(label: "camera-api")
     private let defaults = UserDefaults.standard
@@ -100,6 +96,8 @@ final class MonitorViewModel: ObservableObject {
     private let framePublishLock = NSLock()
     private var framePublishScheduled = false
     private var pendingFramePublish: (UIImage?, String?, String)?
+    private let exposureRefreshLock = NSLock()
+    private var exposureRefreshPending = false
 
     init() {
         rotation = defaults.integer(forKey: "rot")
@@ -118,13 +116,6 @@ final class MonitorViewModel: ObservableObject {
         guard !active else { return }
         active = true
         UIApplication.shared.isIdleTimerDisabled = true
-        if let ssid = defaults.string(forKey: "camera_wifi_ssid"),
-           let password = defaults.string(forKey: "camera_wifi_password"),
-           !ssid.isEmpty, !password.isEmpty {
-            connectToCameraWifi(ssid: ssid, password: password)
-        } else {
-            showConnectHelp = true
-        }
         let t = Thread { [weak self] in self?.monitorLoop() }
         t.name = "monitor"
         worker = t
@@ -158,71 +149,6 @@ final class MonitorViewModel: ObservableObject {
     func toggleHud() {
         hudOn.toggle()
         defaults.set(hudOn, forKey: "hud")
-    }
-
-    // -- conexion WiFi -------------------------------------------------------------
-
-    /// Pide a iOS unirse al punto de acceso de la camara. iOS siempre muestra
-    /// su propia confirmacion antes de cambiar de red.
-    func connectToCameraWifi(ssid: String, password: String) {
-        guard !wifiConnecting else { return }
-        let cleanSSID = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanSSID.isEmpty, !password.isEmpty else {
-            wifiConnectionMessage = "Enter the SSID and password shown on the camera."
-            return
-        }
-
-        defaults.set(cleanSSID, forKey: "camera_wifi_ssid")
-        defaults.set(password, forKey: "camera_wifi_password")
-        wifiConnecting = true
-        wifiConnectionMessage = nil
-
-        let configuration = NEHotspotConfiguration(ssid: cleanSSID,
-                                                   passphrase: password,
-                                                   isWEP: false)
-        configuration.joinOnce = false
-        NEHotspotConfigurationManager.shared.apply(configuration) { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.wifiConnecting = false
-                if let nsError = error as NSError?,
-                   nsError.domain == NEHotspotConfigurationErrorDomain,
-                   nsError.code == NEHotspotConfigurationError.alreadyAssociated.rawValue {
-                    self.wifiConnected = true
-                    self.wifiConnectionMessage = "Already connected to the camera WiFi."
-                    self.showConnectHelp = false
-                } else if let error {
-                    self.wifiConnected = false
-                    let nsError = error as NSError
-                    if nsError.domain == NEHotspotConfigurationErrorDomain,
-                       nsError.code == NEHotspotConfigurationError.`internal`.rawValue {
-                        self.wifiConnectionMessage = "WiFi configuration error (code 8). Reinstall a build signed with the Hotspot Configuration capability. If it persists, make sure WiFi is enabled and restart the iPhone."
-                    } else {
-                        self.wifiConnectionMessage = "Could not connect [\(nsError.code)]: \(error.localizedDescription)"
-                    }
-                } else {
-                    self.wifiConnected = true
-                    self.wifiConnectionMessage = "Connected. The live view will start automatically."
-                    self.showConnectHelp = false
-                }
-            }
-        }
-    }
-
-    /// Elimina la configuracion creada por la app. iOS desconecta el punto de
-    /// acceso al retirarla; las credenciales se conservan para poder volver.
-    func disconnectCameraWifi() {
-        guard let ssid = defaults.string(forKey: "camera_wifi_ssid"), !ssid.isEmpty else {
-            wifiConnected = false
-            return
-        }
-        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
-        wifiConnected = false
-        wifiConnectionMessage = "Disconnected from the camera WiFi."
-        image = nil
-        hudText = nil
-        alertText = nil
-        statusMessage = "Disconnected. Tap WiFi to reconnect."
     }
 
     // -- bucle principal (hilo propio, nunca bloquea la UI) ---------------------------
@@ -262,6 +188,7 @@ final class MonitorViewModel: ObservableObject {
         var fpsWindowCount = 0
         var lastFrameAt = fpsWindowStart
         var lastMeterAt: TimeInterval = 0
+        var lastCameraStateAt: TimeInterval = 0
 
         while active {
             let frame = stream.awaitFrame(timeout: 0.25)
@@ -295,6 +222,11 @@ final class MonitorViewModel: ObservableObject {
             }
 
             let ageMs = Int((ProcessInfo.processInfo.systemUptime - frame.receivedAt) * 1000)
+
+            if now - lastCameraStateAt >= 1 {
+                lastCameraStateAt = now
+                refreshExposureChips()
+            }
 
             // El analisis de exposicion es caro: muestrear ~7 veces/s basta
             if meterOn, now - lastMeterAt >= 0.15, let cg = decoded.cgImage {
@@ -639,6 +571,55 @@ final class MonitorViewModel: ObservableObject {
                     self.shootMode = mode
                     self.chipLabels["MODE"] = mode == "movie" ? "Mode: Video" : "Mode: Photo"
                 }
+            }
+        }
+    }
+
+    /// Sincroniza los tres valores que tambien pueden cambiar desde los
+    /// controles fisicos. Solo permite una lectura pendiente para no formar
+    /// cola si la camara tarda en responder.
+    private func refreshExposureChips() {
+        exposureRefreshLock.lock()
+        guard !exposureRefreshPending else { exposureRefreshLock.unlock(); return }
+        exposureRefreshPending = true
+        exposureRefreshLock.unlock()
+
+        apiQueue.async {
+            defer {
+                self.exposureRefreshLock.lock()
+                self.exposureRefreshPending = false
+                self.exposureRefreshLock.unlock()
+            }
+
+            let exposureSettings = Self.settings.filter {
+                $0.id == "ISO" || $0.id == "Shutter" || $0.id == "Aperture"
+            }
+            var values: [String: String] = [:]
+
+            if let events = try? SonyCamera.call("getEvent", params: [false], version: "1.1") {
+                let keys = ["ISO": "currentIsoSpeedRate",
+                            "Shutter": "currentShutterSpeed",
+                            "Aperture": "currentFNumber"]
+                for case let event as [String: Any] in events {
+                    for (id, key) in keys where values[id] == nil {
+                        if let value = event[key] { values[id] = Self.stringify(value) }
+                    }
+                }
+            }
+
+            for setting in exposureSettings where values[setting.id] == nil {
+                if let r = try? SonyCamera.call(setting.currentMethod), let current = r.first {
+                    values[setting.id] = Self.stringify(current)
+                } else if let r = try? SonyCamera.call(setting.getMethod), let current = r.first {
+                    values[setting.id] = Self.stringify(current)
+                }
+            }
+
+            let labels = Dictionary(uniqueKeysWithValues: exposureSettings.compactMap { setting in
+                values[setting.id].map { (setting.id, setting.chipLabel($0)) }
+            })
+            if !labels.isEmpty {
+                DispatchQueue.main.async { self.chipLabels.merge(labels) { _, new in new } }
             }
         }
     }

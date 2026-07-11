@@ -45,9 +45,8 @@ flotante arrastrable.
 
 Diferencias respecto a Android:
 
-- El boton "WiFi" permite introducir el SSID y la clave mostrados por la
-  camara. iOS presenta su confirmacion nativa y se une a la red sin tener que
-  abrir Ajustes. Las credenciales quedan recordadas para conexiones futuras.
+- Hay que conectarse a la red `DIRECT-xxxx` de la camara desde Ajustes > WiFi
+  antes de usar la app. El boton "WiFi" muestra las instrucciones.
 - La primera vez iOS pide permiso de "red local" — hay que aceptarlo o la
   camara no sera alcanzable.
 
