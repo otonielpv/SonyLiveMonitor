@@ -31,6 +31,21 @@ gradle :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### Firma de las releases Android
+
+Los APK adjuntos a tags `v*` se firman con una clave estable para que Android
+permita actualizar la aplicación. Configura estos secretos en GitHub Actions:
+
+- `ANDROID_KEYSTORE_BASE64`: contenido del keystore codificado en Base64.
+- `ANDROID_KEYSTORE_PASSWORD`: contraseña del keystore.
+- `ANDROID_KEY_ALIAS`: alias de la clave.
+- `ANDROID_KEY_PASSWORD`: contraseña de la clave.
+
+La clave debe conservarse: si se pierde o cambia, Android exigirá desinstalar la
+versión anterior antes de instalar una nueva. Los APK antiguos publicados como
+`debug` usan otra firma y también requieren una única desinstalación antes de
+instalar la primera release firmada de forma estable.
+
 Uso: camara en "Ctrl. con smartphone", movil conectado a la WiFi
 `DIRECT-xxxx:ILCE-6000`, abrir la app. Se reconecta sola.
 

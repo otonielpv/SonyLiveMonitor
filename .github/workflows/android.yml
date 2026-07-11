@@ -14,6 +14,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     defaults:
       run:
         working-directory: android
@@ -39,13 +43,43 @@ jobs:
         run: chmod +x gradlew
 
       - name: Compilar APK debug
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Preparar firma estable de release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Falta el secreto ANDROID_KEYSTORE_BASE64"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "Falta el secreto ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo "Falta el secreto ANDROID_KEY_ALIAS"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "Falta el secreto ANDROID_KEY_PASSWORD"; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release.keystore
+          echo "ANDROID_KEYSTORE_FILE=$PWD/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Compilar APK release firmado
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION_NAME="${GITHUB_REF_NAME#v}"
+          ./gradlew :app:assembleRelease \
+            -PversionCode="${GITHUB_RUN_NUMBER}" \
+            -PversionName="$VERSION_NAME" \
+            --no-daemon --stacktrace
+
+      - name: Verificar firma del APK release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose app/build/outputs/apk/release/app-release.apk"
 
       - name: Renombrar APK con la version
         id: apk
         run: |
-          SRC=app/build/outputs/apk/debug/app-debug.apk
-          VER="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            SRC=app/build/outputs/apk/release/app-release.apk
+          else
+            SRC=app/build/outputs/apk/debug/app-debug.apk
+          fi
+          VER="${GITHUB_REF_NAME//\//-}"
           OUT="SonyLiveMonitor-${VER}.apk"
           cp "$SRC" "$OUT"
           echo "path=android/$OUT" >> "$GITHUB_OUTPUT"
@@ -54,7 +88,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: Adjuntar APK a la Release (solo en tags v*)
