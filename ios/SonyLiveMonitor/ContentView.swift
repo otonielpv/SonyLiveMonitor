@@ -49,7 +49,7 @@ struct ContentView: View {
                 model.stop()
             }
         }
-        .sheet(isPresented: $model.showConnectHelp) { ConnectHelpView() }
+        .sheet(isPresented: $model.showConnectHelp) { CameraWifiConnectView(model: model) }
     }
 }
 
@@ -281,7 +281,15 @@ struct ControlPanel: View {
                            active: model.strip?.owner == "MODE") { model.toggleModeStrip() }
                 ZoomChip(label: "Z− (W)", direction: "out", model: model)
                 ZoomChip(label: "Z+ (T)", direction: "in", model: model)
-                ChipButton(label: "WiFi") { model.showConnectHelp = true }
+                ChipButton(label: model.wifiConnecting ? "Connecting..." :
+                           (model.wifiConnected ? "Disconnect" : "WiFi"),
+                           active: model.wifiConnected) {
+                    if model.wifiConnected {
+                        model.disconnectCameraWifi()
+                    } else if !model.wifiConnecting {
+                        model.showConnectHelp = true
+                    }
+                }
                 ChipButton(label: "Rot: \(model.rotation)°") { model.cycleRotation() }
                 ChipButton(label: "Grid: \(model.grid.label)") { model.cycleGrid() }
                 ChipButton(label: "Meter: \(model.meterOn ? "on" : "off")") { model.toggleMeter() }
@@ -459,7 +467,65 @@ struct ShutterOverlay: View {
 
 // -- ayuda de conexion --------------------------------------------------------------------
 
-struct ConnectHelpView: View {
+struct CameraWifiConnectView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: MonitorViewModel
+    @State private var ssid = UserDefaults.standard.string(forKey: "camera_wifi_ssid") ?? ""
+    @State private var password = UserDefaults.standard.string(forKey: "camera_wifi_password") ?? ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Label("On the camera, open **Ctrl w/ Smartphone**. Its screen shows the SSID and password.",
+                          systemImage: "camera")
+
+                    TextField("DIRECT-xxxx:ILCE-6000", text: $ssid)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textContentType(.none)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.15)))
+                    SecureField("Camera WiFi password", text: $password)
+                        .textContentType(.password)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.15)))
+
+                    Button {
+                        model.connectToCameraWifi(ssid: ssid, password: password)
+                    } label: {
+                        HStack {
+                            if model.wifiConnecting { ProgressView() }
+                            Text(model.wifiConnecting ? "Connecting..." : "Connect to camera WiFi")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.wifiConnecting || ssid.isEmpty || password.isEmpty)
+
+                    if let message = model.wifiConnectionMessage {
+                        Text(message).font(.footnote).foregroundStyle(.secondary)
+                    }
+
+                    Label("iOS will ask for confirmation before joining. The live view starts automatically after you accept.",
+                          systemImage: "wifi")
+                    Label("Also allow local network access when iOS asks for it.",
+                          systemImage: "exclamationmark.triangle")
+                }
+                .padding()
+            }
+            .navigationTitle("Connect to camera")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct LegacyConnectHelpView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

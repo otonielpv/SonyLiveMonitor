@@ -1,5 +1,6 @@
 import UIKit
 import Combine
+import NetworkExtension
 
 enum GridMode: Int, CaseIterable {
     case off, thirds, thirdsDiag, cross
@@ -74,6 +75,9 @@ final class MonitorViewModel: ObservableObject {
     @Published var shootMode = "still"
     @Published var movieRecording = false
     @Published var showConnectHelp = false
+    @Published var wifiConnecting = false
+    @Published var wifiConnected = false
+    @Published var wifiConnectionMessage: String?
 
     private let apiQueue = DispatchQueue(label: "camera-api")
     private let defaults = UserDefaults.standard
@@ -110,6 +114,13 @@ final class MonitorViewModel: ObservableObject {
         guard !active else { return }
         active = true
         UIApplication.shared.isIdleTimerDisabled = true
+        if let ssid = defaults.string(forKey: "camera_wifi_ssid"),
+           let password = defaults.string(forKey: "camera_wifi_password"),
+           !ssid.isEmpty, !password.isEmpty {
+            connectToCameraWifi(ssid: ssid, password: password)
+        } else {
+            showConnectHelp = true
+        }
         let t = Thread { [weak self] in self?.monitorLoop() }
         t.name = "monitor"
         worker = t
@@ -143,6 +154,65 @@ final class MonitorViewModel: ObservableObject {
     func toggleHud() {
         hudOn.toggle()
         defaults.set(hudOn, forKey: "hud")
+    }
+
+    // -- conexion WiFi -------------------------------------------------------------
+
+    /// Pide a iOS unirse al punto de acceso de la camara. iOS siempre muestra
+    /// su propia confirmacion antes de cambiar de red.
+    func connectToCameraWifi(ssid: String, password: String) {
+        guard !wifiConnecting else { return }
+        let cleanSSID = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSSID.isEmpty, !password.isEmpty else {
+            wifiConnectionMessage = "Enter the SSID and password shown on the camera."
+            return
+        }
+
+        defaults.set(cleanSSID, forKey: "camera_wifi_ssid")
+        defaults.set(password, forKey: "camera_wifi_password")
+        wifiConnecting = true
+        wifiConnectionMessage = nil
+
+        let configuration = NEHotspotConfiguration(ssid: cleanSSID,
+                                                   passphrase: password,
+                                                   isWEP: false)
+        configuration.joinOnce = false
+        NEHotspotConfigurationManager.shared.apply(configuration) { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.wifiConnecting = false
+                if let nsError = error as NSError?,
+                   nsError.domain == NEHotspotConfigurationErrorDomain,
+                   nsError.code == NEHotspotConfigurationError.alreadyAssociated.rawValue {
+                    self.wifiConnected = true
+                    self.wifiConnectionMessage = "Already connected to the camera WiFi."
+                    self.showConnectHelp = false
+                } else if let error {
+                    self.wifiConnected = false
+                    self.wifiConnectionMessage = "Could not connect: \(error.localizedDescription)"
+                } else {
+                    self.wifiConnected = true
+                    self.wifiConnectionMessage = "Connected. The live view will start automatically."
+                    self.showConnectHelp = false
+                }
+            }
+        }
+    }
+
+    /// Elimina la configuracion creada por la app. iOS desconecta el punto de
+    /// acceso al retirarla; las credenciales se conservan para poder volver.
+    func disconnectCameraWifi() {
+        guard let ssid = defaults.string(forKey: "camera_wifi_ssid"), !ssid.isEmpty else {
+            wifiConnected = false
+            return
+        }
+        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
+        wifiConnected = false
+        wifiConnectionMessage = "Disconnected from the camera WiFi."
+        image = nil
+        hudText = nil
+        alertText = nil
+        statusMessage = "Disconnected. Tap WiFi to reconnect."
     }
 
     // -- bucle principal (hilo propio, nunca bloquea la UI) ---------------------------
