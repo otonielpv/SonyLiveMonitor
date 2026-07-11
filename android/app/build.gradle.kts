@@ -26,10 +26,7 @@ android {
     defaultConfig {
         applicationId = "com.otoniel.sonylivemonitor"
         minSdk = 24
-        // targetSdk 28 a proposito: permite conectar a la WiFi de la camara
-        // con la API legacy (WifiManager.enableNetwork), sin el dialogo de
-        // seleccion de red que Android 10+ impone a las apps con target >= 29.
-        targetSdk = 28
+        targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
     }
@@ -63,9 +60,4 @@ android {
         jvmTarget = "17"
     }
 
-    lint {
-        // targetSdk 28 es intencionado para conservar la API WiFi legacy.
-        // La aplicacion se distribuye como APK, no mediante Google Play.
-        disable += "ExpiredTargetSdkVersion"
-    }
 }

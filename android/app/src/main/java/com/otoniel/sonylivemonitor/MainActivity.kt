@@ -1,7 +1,9 @@
 package com.otoniel.sonylivemonitor
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -17,6 +19,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -41,6 +44,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
+
+    companion object {
+        private const val WIFI_PERMISSION_REQUEST = 1001
+    }
 
     private enum class Grid { OFF, TERCIOS, TERCIOS_DIAG, CRUZ }
 
@@ -77,6 +84,7 @@ class MainActivity : Activity() {
 
     @Volatile private var directNetwork: Network? = null
     private var directCallback: ConnectivityManager.NetworkCallback? = null
+    private var pendingWifiCredentials: Pair<String, String>? = null
 
     @Volatile private var grid = Grid.OFF
     @Volatile private var meterOn = false
@@ -889,12 +897,7 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /**
-     * Conexion directa y silenciosa con la API legacy de WifiManager
-     * (posible porque la app tiene targetSdk 28): anade/activa la red de la
-     * camara sin pasar por ningun dialogo ni menu del sistema.
-     */
-    @Suppress("DEPRECATION")
+    /** Conecta a la red local de la camara usando la API adecuada del sistema. */
     private fun connectDirect(ssid: String, pass: String) {
         if (ssid.isEmpty()) {
             toast("Missing SSID")
@@ -908,9 +911,108 @@ class MainActivity : Activity() {
             return
         }
 
+        if (!hasWifiPermission()) {
+            pendingWifiCredentials = ssid to pass
+            requestPermissions(arrayOf(requiredWifiPermission()), WIFI_PERMISSION_REQUEST)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            connectDirectModern(ssid, pass)
+        } else {
+            connectDirectLegacy(ssid, pass)
+        }
+    }
+
+    private fun requiredWifiPermission(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+
+    private fun hasWifiPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            checkSelfPermission(requiredWifiPermission()) == PackageManager.PERMISSION_GRANTED
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != WIFI_PERMISSION_REQUEST) return
+        val credentials = pendingWifiCredentials
+        pendingWifiCredentials = null
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && credentials != null) {
+            connectDirect(credentials.first, credentials.second)
+        } else {
+            toast("WiFi permission is required to connect to the camera")
+        }
+    }
+
+    /** Android 10+: conexion local aprobada mediante el dialogo seguro del sistema. */
+    private fun connectDirectModern(ssid: String, pass: String) {
         val wifi = applicationContext.getSystemService(WifiManager::class.java)
         if (!wifi.isWifiEnabled) {
-            wifi.isWifiEnabled = true  // legacy: permitido con targetSdk 28
+            toast("Enable WiFi and try again")
+            return
+        }
+
+        directCallback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
+        directNetwork = null
+        connectivity.bindProcessToNetwork(null)
+
+        val specifier = WifiNetworkSpecifier.Builder()
+            .setSsid(ssid)
+            .setWpa2Passphrase(pass)
+            .build()
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .setNetworkSpecifier(specifier)
+            .build()
+
+        btnConnect.text = "Searching..."
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                directNetwork = network
+                connectivity.bindProcessToNetwork(network)
+                apiExecutor.execute {
+                    val ok = runCatching {
+                        SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getVersions")
+                    }.isSuccess
+                    runOnUiThread {
+                        btnConnect.text = if (ok) "Disconnect" else "Searching..."
+                        if (!ok) toast("Connected WiFi, but the camera did not respond")
+                    }
+                }
+            }
+
+            override fun onUnavailable() {
+                directNetwork = null
+                runOnUiThread {
+                    btnConnect.text = "Connect"
+                    toast("Camera WiFi connection was cancelled or unavailable")
+                }
+            }
+
+            override fun onLost(network: Network) {
+                if (directNetwork == network) directNetwork = null
+                connectivity.bindProcessToNetwork(null)
+                runOnUiThread { btnConnect.text = "Connect" }
+            }
+        }
+        directCallback = callback
+        connectivity.requestNetwork(request, callback)
+    }
+
+    /** Android 7-9: conexion mediante WifiManager, requerido por esas versiones. */
+    @Suppress("DEPRECATION")
+    private fun connectDirectLegacy(ssid: String, pass: String) {
+        val wifi = applicationContext.getSystemService(WifiManager::class.java)
+        if (!wifi.isWifiEnabled) {
+            wifi.isWifiEnabled = true
         }
 
         val prefs = getPreferences(MODE_PRIVATE)
@@ -946,6 +1048,16 @@ class MainActivity : Activity() {
     /** Suelta la WiFi de la camara y deja al movil volver a su red anterior. */
     @Suppress("DEPRECATION")
     private fun disconnectCamera() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            directCallback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
+            directCallback = null
+            directNetwork = null
+            connectivity.bindProcessToNetwork(null)
+            btnConnect.text = "Connect"
+            toast("Camera disconnected")
+            return
+        }
+
         val wifi = applicationContext.getSystemService(WifiManager::class.java)
         val ssid = getPreferences(MODE_PRIVATE).getString("ssid", "") ?: ""
         val netId = getPreferences(MODE_PRIVATE).getInt("netId_\"$ssid\"", -1)
