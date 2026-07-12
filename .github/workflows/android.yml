@@ -83,6 +83,28 @@ jobs:
           OUT="SonyLiveMonitor-${VER}.apk"
           cp "$SRC" "$OUT"
           echo "path=android/$OUT" >> "$GITHUB_OUTPUT"
+          # Copia del APK de camara con nombre inequivoco (NO instalar en el movil)
+          cp "$GITHUB_WORKSPACE/camera-patches/SonyLiveMonitor-a6000-avcontent.apk" \
+            "SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk"
+          echo "camera=android/SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Extraer notas de release del tag
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Saca la seccion "## vX.Y" de docs/RELEASE_NOTES.md (hasta el siguiente '## ')
+          NOTES_FILE="$GITHUB_WORKSPACE/docs/RELEASE_NOTES.md"
+          OUT="$GITHUB_WORKSPACE/release-body.md"
+          if awk -v tag="## ${GITHUB_REF_NAME}" '
+              $0==tag {found=1; next}
+              found && /^## / {exit}
+              found {print}
+            ' "$NOTES_FILE" > "$OUT" && [ -s "$OUT" ]; then
+            echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          else
+            echo "Sin notas para ${GITHUB_REF_NAME} en RELEASE_NOTES.md; se autogeneraran."
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Subir APK como artefacto (siempre)
         uses: actions/upload-artifact@v4
@@ -101,5 +123,8 @@ jobs:
           # parcheado con avContent). El de la camara se instala con PMCA-RE.
           files: |
             ${{ steps.apk.outputs.path }}
-            ${{ github.workspace }}/camera-patches/SonyLiveMonitor-a6000-avcontent.apk
+            ${{ steps.apk.outputs.camera }}
+          body_path: ${{ steps.notes.outputs.path }}
+          # Si no hay notas propias para el tag, deja que GitHub las autogenere
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}
           fail_on_unmatched_files: true
