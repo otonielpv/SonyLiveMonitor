@@ -32,7 +32,7 @@
   (install on the **camera** with PMCA-RE, not on the phone).
 - `SonyLiveMonitor-v0.3-unsigned.ipa` — iOS, sideload with AltStore.
 
-See the [install guide](a6000-live-monitor-guide.md).
+See the [install guide](https://github.com/otonielpv/SonyLiveMonitor/blob/main/docs/a6000-live-monitor-guide.md).
 
 ---
 
