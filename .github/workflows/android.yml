@@ -97,5 +97,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.apk.outputs.path }}
+          # APK del movil (SonyLiveMonitor) + APK de la camara (Smart Remote
+          # parcheado con avContent). El de la camara se instala con PMCA-RE.
+          files: |
+            ${{ steps.apk.outputs.path }}
+            ${{ github.workspace }}/camera-patches/SonyLiveMonitor-a6000-avcontent.apk
           fail_on_unmatched_files: true
