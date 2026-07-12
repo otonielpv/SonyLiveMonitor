@@ -4,10 +4,13 @@
 
 **New**
 
-- **WiFi signal monitor in the HUD** — a second HUD line shows the camera
-  network's RSSI (dBm) and link speed (Mbps), colour-coded (green / amber /
-  red). Now you can tell whether low fps come from a weak WiFi signal or from
-  the camera itself.
+- **Link health monitor in the HUD** — a second HUD line tells you whether low
+  fps are caused by the WiFi link or the camera, colour-coded (green / amber /
+  red). On Android it shows the WiFi RSSI (dBm) and link speed; on iOS (where
+  Apple blocks RSSI) it shows a link-health estimate from frame gaps and drops.
+- **Camera diagnostics** — a *Diagnostics* button produces a shareable report of
+  what the connected camera supports, on both Android and iOS. Handy for testers
+  on unverified models.
 - **Camera capability detection** — the app reads the camera's available API
   and hides controls a body genuinely doesn't support, so it behaves better
   across different Sony models (a6000, a6300, …).

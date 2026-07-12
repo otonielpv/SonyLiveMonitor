@@ -2,6 +2,16 @@ import SwiftUI
 
 private let accentGreen = Color(red: 0, green: 1, blue: 0.5)
 private let alertRed = Color(red: 1, green: 0.3, blue: 0.3)
+private let warnAmber = Color(red: 1, green: 0.78, blue: 0)
+
+/// Color del indicador de salud del enlace: 1=good verde, 2=fair ambar, 3=weak rojo.
+private func linkColor(_ quality: Int) -> Color {
+    switch quality {
+    case 1: return accentGreen
+    case 2: return warnAmber
+    default: return alertRed
+    }
+}
 
 struct ContentView: View {
     @StateObject private var model = MonitorViewModel()
@@ -50,6 +60,12 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $model.showConnectHelp) { ConnectHelpView() }
+        .sheet(isPresented: Binding(
+            get: { model.diagnosticsReport != nil },
+            set: { if !$0 { model.diagnosticsReport = nil } }
+        )) {
+            DiagnosticsView(report: model.diagnosticsReport ?? "")
+        }
         .fullScreenCover(isPresented: $model.showGallery, onDismiss: { model.start() }) {
             CameraGalleryView { model.showGallery = false }
         }
@@ -112,6 +128,9 @@ struct VideoArea: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if model.hudOn, model.statusMessage == nil, let hud = model.hudText {
                         HudLabel(text: hud, color: accentGreen, size: 13)
+                    }
+                    if model.hudOn, model.statusMessage == nil, let link = model.linkText {
+                        HudLabel(text: link, color: linkColor(model.linkQuality), size: 12)
                     }
                     if let alert = model.alertText {
                         HudLabel(text: alert, color: alertRed, size: 17)
@@ -290,6 +309,7 @@ struct ControlPanel: View {
                 ChipButton(label: "Meter: \(model.meterOn ? "on" : "off")") { model.toggleMeter() }
                 ChipButton(label: "HUD: \(model.hudOn ? "on" : "off")") { model.toggleHud() }
                 ChipButton(label: "Camera card") { model.openGallery() }
+                ChipButton(label: "Diagnostics") { model.runDiagnostics() }
             }
             .padding(6)
         }
@@ -486,6 +506,37 @@ struct ConnectHelpView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+// -- diagnostico de camara ----------------------------------------------------------------
+
+/// Informe legible de la camara conectada, pensado para que los testers lo
+/// compartan cuando prueban un modelo no verificado.
+struct DiagnosticsView: View {
+    let report: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(report)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle("Camera diagnostics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    ShareLink(item: report) { Image(systemName: "square.and.arrow.up") }
+                }
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }

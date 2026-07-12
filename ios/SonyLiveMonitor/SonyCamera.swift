@@ -62,6 +62,30 @@ enum SonyCamera {
         throw CameraError("\(method): no result")
     }
 
+    /// Informe legible para compartir desde la app: con esto un tester con un
+    /// modelo no probado nos dice exactamente que soporta su camara.
+    /// Sincrono: llamar fuera del hilo principal.
+    static func diagnostics() -> String {
+        func probe(_ method: String, endpoint: String = defaultEndpoint, version: String = "1.0") -> String {
+            do { return try String(describing: call(method, endpoint: endpoint, version: version)) }
+            catch { return "ERROR: \(error.localizedDescription)" }
+        }
+
+        var api: [String] = []
+        if let list = try? call("getAvailableApiList").first as? [String] {
+            api = list.sorted()
+        }
+
+        var out = "SonyLiveMonitor diagnostics (iOS)\n"
+        out += "Camera endpoint: \(defaultEndpoint)\n"
+        out += "getVersions: \(probe("getVersions"))\n"
+        out += "getApplicationInfo: \(probe("getApplicationInfo"))\n"
+        out += "avContent getSchemeList: \(probe("getSchemeList", endpoint: contentEndpoint))\n"
+        out += "getAvailableApiList (\(api.count)):\n"
+        for method in api { out += "- \(method)\n" }
+        return out
+    }
+
     /// Prepara la camara y devuelve la URL del stream de liveview.
     static func startLiveview(endpoint: String = defaultEndpoint) throws -> String {
         // La a6000 exige startRecMode antes del liveview; en otros modelos

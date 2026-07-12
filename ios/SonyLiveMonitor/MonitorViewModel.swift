@@ -79,6 +79,12 @@ final class MonitorViewModel: ObservableObject {
     @Published var movieRecording = false
     @Published var showConnectHelp = false
     @Published var showGallery = false
+    // Salud del enlace con la camara. iOS no expone el RSSI del WiFi, asi que
+    // se estima del transporte real: huecos entre frames (jitter) + drops. Es
+    // el sintoma directo de mala red, que es lo que importa para diagnosticar.
+    @Published var linkText: String?          // ej. "link: fair (1.5 gaps/s)"
+    @Published var linkQuality = 0            // 0=desconocido 1=good 2=fair 3=weak
+    @Published var diagnosticsReport: String?  // no-nil mientras se muestra la hoja
 
     private let apiQueue = DispatchQueue(label: "camera-api")
     private let defaults = UserDefaults.standard
@@ -197,6 +203,11 @@ final class MonitorViewModel: ObservableObject {
         var lastFrameAt = fpsWindowStart
         var lastMeterAt: TimeInterval = 0
         var lastCameraStateAt: TimeInterval = 0
+        // Ventana para la salud del enlace: contamos "huecos" (intervalos entre
+        // frames mayores de 120 ms, ~3x el periodo a 25 fps) y drops por segundo.
+        var linkWindowStart = fpsWindowStart
+        var gapCount = 0
+        var dropsAtWindowStart = 0
 
         while active {
             let frame = stream.awaitFrame(timeout: 0.25)
@@ -222,11 +233,22 @@ final class MonitorViewModel: ObservableObject {
             guard let decoded = UIImage(data: frame.jpeg) else { continue }  // JPEG corrupto ocasional
 
             fpsWindowCount += 1
+            // Un intervalo largo entre frames = hueco de transporte (jitter/red)
+            if now - lastFrameAt > 0.12 { gapCount += 1 }
             lastFrameAt = now
             if now - fpsWindowStart >= 1 {
                 fps = Float(fpsWindowCount) / Float(now - fpsWindowStart)
                 fpsWindowStart = now
                 fpsWindowCount = 0
+            }
+            if now - linkWindowStart >= 1 {
+                let elapsed = now - linkWindowStart
+                let gapsPerSec = Double(gapCount) / elapsed
+                let dropsPerSec = Double(stream.framesDropped - dropsAtWindowStart) / elapsed
+                updateLinkHealth(gapsPerSec: gapsPerSec, dropsPerSec: dropsPerSec)
+                linkWindowStart = now
+                gapCount = 0
+                dropsAtWindowStart = stream.framesDropped
             }
 
             let ageMs = Int((ProcessInfo.processInfo.systemUptime - frame.receivedAt) * 1000)
@@ -274,11 +296,41 @@ final class MonitorViewModel: ObservableObject {
         }
     }
 
+    /// Traduce jitter (huecos/s) y drops/s a una salud de enlace legible.
+    /// Umbrales conservadores: a 25 fps un enlace sano tiene ~0 huecos.
+    private func updateLinkHealth(gapsPerSec: Double, dropsPerSec: Double) {
+        let quality: Int      // 1=good 2=fair 3=weak
+        if gapsPerSec >= 3 || dropsPerSec >= 8 {
+            quality = 3
+        } else if gapsPerSec >= 1 || dropsPerSec >= 3 {
+            quality = 2
+        } else {
+            quality = 1
+        }
+        let label = quality == 1 ? "good" : (quality == 2 ? "fair" : "weak")
+        let text = String(format: "link: %@ (%.1f gaps/s)", label, gapsPerSec)
+        DispatchQueue.main.async {
+            self.linkQuality = quality
+            self.linkText = text
+        }
+    }
+
+    /// Genera el informe de diagnostico y lo publica para mostrar en una hoja.
+    func runDiagnostics() {
+        showToast("Reading camera info...")
+        apiQueue.async {
+            let report = SonyCamera.diagnostics()
+            DispatchQueue.main.async { self.diagnosticsReport = report }
+        }
+    }
+
     private func publishMessage(_ message: String) {
         DispatchQueue.main.async {
             self.statusMessage = message
             self.hudText = nil
             self.alertText = nil
+            self.linkText = nil       // sin stream no hay salud de enlace valida
+            self.linkQuality = 0
         }
     }
 
