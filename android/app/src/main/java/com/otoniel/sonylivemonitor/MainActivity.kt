@@ -131,6 +131,13 @@ class MainActivity : Activity() {
     @Volatile private var hudOn = true
     @Volatile private var shootMode = "still"
     @Volatile private var movieRecording = false
+
+    // Salud del WiFi de la camara: ayuda a saber si unos fps bajos vienen de la
+    // senal (RSSI/velocidad de enlace) o de la propia camara. Se muestrea en el
+    // bucle del monitor y se pinta como segunda linea del HUD.
+    @Volatile private var wifiRssi = 0          // dBm; 0 = desconocido
+    @Volatile private var wifiLinkMbps = 0      // Mbps; 0 = desconocido
+    private var lastWifiSampleAt = 0L
     private lateinit var valueStrip: HorizontalScrollView
     private lateinit var valueRow: LinearLayout
     private var openSetting: Any? = null  // Setting o "EV"
@@ -143,6 +150,8 @@ class MainActivity : Activity() {
     private val hudShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK; textSize = 34f; strokeWidth = 6f; style = Paint.Style.STROKE
     }
+    // Segunda linea del HUD (WiFi): mismo tamano, color segun la calidad de senal
+    private val wifiPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 30f }
     private val alertPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(255, 64, 64); textSize = 44f
     }
@@ -1342,6 +1351,10 @@ class MainActivity : Activity() {
                     lastCameraStateAt = now
                     refreshExposureChips()
                 }
+                if (now - lastWifiSampleAt >= 1000) {
+                    lastWifiSampleAt = now
+                    sampleWifi()
+                }
                 // El analisis de exposicion es caro: muestrear ~7 veces/s basta
                 exposure = when {
                     !meterOn -> null
@@ -1355,6 +1368,19 @@ class MainActivity : Activity() {
             }
         } finally {
             stream.stop()
+        }
+    }
+
+    /** Lee la salud del WiFi al que esta unida la app (la red de la camara).
+     *  RSSI y velocidad de enlace explican caidas de fps por senal debil. */
+    @Suppress("DEPRECATION")
+    private fun sampleWifi() {
+        runCatching {
+            val wifi = applicationContext.getSystemService(WifiManager::class.java)
+            val info = wifi?.connectionInfo ?: return
+            // rssi -127 es el valor "invalido" de Android; lo tratamos como desconocido
+            wifiRssi = if (info.rssi > -127) info.rssi else 0
+            wifiLinkMbps = if (info.linkSpeed > 0) info.linkSpeed else 0
         }
     }
 
@@ -1413,6 +1439,24 @@ class MainActivity : Activity() {
                 hudY = if (topBarLeft < hudWidth) topBarBottom + 44f else 48f
                 canvas.drawText(hud, 24f, hudY, hudShadow)
                 canvas.drawText(hud, 24f, hudY, hudPaint)
+                // Segunda linea: salud del WiFi de la camara (si hay lectura)
+                if (wifiRssi != 0) {
+                    val quality = when {
+                        wifiRssi >= -60 -> "good"
+                        wifiRssi >= -70 -> "fair"
+                        else -> "weak"
+                    }
+                    val link = if (wifiLinkMbps > 0) " | link %d Mbps".format(wifiLinkMbps) else ""
+                    val wifiLine = "wifi %d dBm (%s)%s".format(wifiRssi, quality, link)
+                    wifiPaint.color = when {
+                        wifiRssi >= -60 -> Color.rgb(0, 255, 128)   // verde
+                        wifiRssi >= -70 -> Color.rgb(255, 200, 0)   // ambar
+                        else -> Color.rgb(255, 80, 80)              // rojo
+                    }
+                    canvas.drawText(wifiLine, 24f, hudY + 40f, hudShadow)
+                    canvas.drawText(wifiLine, 24f, hudY + 40f, wifiPaint)
+                    hudY += 40f  // el alert/zoom bajan para no solaparse
+                }
             } else if (alert != null) {
                 hudY = if (topBarLeft < alertPaint.measureText(alert) + 48f) topBarBottom + 44f else 48f
             }
