@@ -10,6 +10,7 @@ struct CameraError: LocalizedError {
 enum SonyCamera {
 
     static let defaultEndpoint = "http://192.168.122.1:8080/sony/camera"
+    static let contentEndpoint = "http://192.168.122.1:8080/sony/avContent"
 
     private static let idLock = NSLock()
     private static var nextId = 0

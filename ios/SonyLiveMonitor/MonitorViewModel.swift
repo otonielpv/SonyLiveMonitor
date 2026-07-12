@@ -78,6 +78,7 @@ final class MonitorViewModel: ObservableObject {
     @Published var shootMode = "still"
     @Published var movieRecording = false
     @Published var showConnectHelp = false
+    @Published var showGallery = false
 
     private let apiQueue = DispatchQueue(label: "camera-api")
     private let defaults = UserDefaults.standard
@@ -112,8 +113,15 @@ final class MonitorViewModel: ObservableObject {
 
     // -- ciclo de vida ------------------------------------------------------------
 
+    /// Detiene el liveview y abre la galeria de la tarjeta a pantalla completa.
+    /// El monitor se reinicia al cerrar la galeria (onDismiss en ContentView).
+    func openGallery() {
+        stop()
+        showGallery = true
+    }
+
     func start() {
-        guard !active else { return }
+        guard !active, !showGallery else { return }
         active = true
         UIApplication.shared.isIdleTimerDisabled = true
         let t = Thread { [weak self] in self?.monitorLoop() }

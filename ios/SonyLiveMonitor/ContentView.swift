@@ -50,6 +50,9 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $model.showConnectHelp) { ConnectHelpView() }
+        .fullScreenCover(isPresented: $model.showGallery, onDismiss: { model.start() }) {
+            CameraGalleryView { model.showGallery = false }
+        }
     }
 }
 
@@ -286,6 +289,7 @@ struct ControlPanel: View {
                 ChipButton(label: "Grid: \(model.grid.label)") { model.cycleGrid() }
                 ChipButton(label: "Meter: \(model.meterOn ? "on" : "off")") { model.toggleMeter() }
                 ChipButton(label: "HUD: \(model.hudOn ? "on" : "off")") { model.toggleHud() }
+                ChipButton(label: "Camera card") { model.openGallery() }
             }
             .padding(6)
         }

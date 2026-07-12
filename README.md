@@ -21,7 +21,13 @@ Componentes:
 - Controles de camara: ISO, velocidad, apertura, compensacion EV y disparo
   (los valores disponibles se consultan a la camara segun el modo del dial).
 - Enfoque tactil tocando la imagen (setTouchAFPosition).
+- Con Smart Remote Control parcheado en la a6000, galeria completa de la
+  tarjeta mediante `avContent` y descarga separada de JPEG y RAW/ARW.
 - Reconexion automatica y re-vinculacion a la WiFi activa si cambia de red.
+
+La vista `Camera card` incluye las fotos tomadas tanto desde la app como con el
+obturador fisico y evita duplicarlas automaticamente en el almacenamiento del
+movil. La descarga de JPEG/ARW es siempre una accion explicita del usuario.
 
 Compilar e instalar (con el SDK de Android y un movil con depuracion USB):
 
@@ -55,8 +61,10 @@ Port 1:1 de la app Android en SwiftUI (`ios/SonyLiveMonitor.xcodeproj`):
 mismo lector de liveview anti-lag (socket crudo con `TCP_NODELAY`, solo se
 conserva el frame mas reciente), mismos controles (ISO, velocidad, apertura,
 enfoque, flash, temporizador, EV, WB, modo foto/video), zoom motorizado,
-enfoque tactil, cuadriculas, HUD, medidor de exposicion y disparador
-flotante arrastrable.
+enfoque tactil, cuadriculas, HUD, medidor de exposicion, disparador
+flotante arrastrable y la misma galeria `Camera card` (avContent): miniaturas
+paginadas, visor con zoom y paso de fotos deslizando, seleccion multiple y
+descarga de JPEG/RAW con dialogo de progreso que bloquea la pantalla.
 
 Diferencias respecto a Android:
 
@@ -64,6 +72,9 @@ Diferencias respecto a Android:
   antes de usar la app. El boton "WiFi" muestra las instrucciones.
 - La primera vez iOS pide permiso de "red local" — hay que aceptarlo o la
   camara no sera alcanzable.
+- Las descargas de la galeria se guardan en la app Archivos
+  (`En mi iPhone > Sony Live Monitor`) o en la carpeta que se elija con el
+  boton "Folder"; en Android van a `Download/SonyLiveMonitor`.
 
 Compilar e instalar en un iPhone:
 

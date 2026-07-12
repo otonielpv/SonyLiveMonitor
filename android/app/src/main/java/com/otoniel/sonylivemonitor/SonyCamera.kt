@@ -11,6 +11,7 @@ class CameraException(message: String) : Exception(message)
 object SonyCamera {
 
     const val DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony/camera"
+    const val CONTENT_ENDPOINT = "http://192.168.122.1:8080/sony/avContent"
 
     private var nextId = 0
 

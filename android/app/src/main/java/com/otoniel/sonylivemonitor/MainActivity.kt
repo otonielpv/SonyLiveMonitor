@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -79,6 +80,7 @@ class MainActivity : Activity() {
     private val exposureRefreshPending = AtomicBoolean(false)
 
     @Volatile private var active = false
+    @Volatile private var openingGallery = false
     private var worker: Thread? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -173,6 +175,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        openingGallery = false
         active = true
         worker = Thread(::monitorLoop, "monitor").also { it.start() }
     }
@@ -186,7 +189,9 @@ class MainActivity : Activity() {
         networkCallback = null
         // Nota: NO liberamos directCallback aqui — soltarlo desconectaria la
         // WiFi de la camara cada vez que la app pasa a segundo plano.
-        connectivity.bindProcessToNetwork(null)
+        // GalleryActivity comparte esta conexion: no soltar el NetworkRequest
+        // al abrirla, pues las redes DIRECT sin Internet no son la ruta por defecto.
+        if (!openingGallery) connectivity.bindProcessToNetwork(null)
     }
 
     override fun onDestroy() {
@@ -372,6 +377,10 @@ class MainActivity : Activity() {
             hudOn = !hudOn
             getPreferences(MODE_PRIVATE).edit().putBoolean("hud", hudOn).apply()
             btnHud.text = "HUD: ${if (hudOn) "on" else "off"}"
+        }
+        chip("Camera card") {
+            openingGallery = true
+            startActivity(Intent(this, CameraGalleryActivity::class.java))
         }
 
         controlGrid = GridLayout(this)
