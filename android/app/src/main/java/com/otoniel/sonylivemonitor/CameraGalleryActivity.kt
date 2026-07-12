@@ -14,6 +14,7 @@ import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -92,12 +93,37 @@ class CameraGalleryActivity : Activity() {
     @Volatile private var loadingPage = false
     @Volatile private var nextIndex = 0
     private var selectMode = false
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
         updateFolderLabel()
         loadCard()
+    }
+
+    // Mismo lock que MainActivity: sin el, el ahorro de energia WiFi
+    // (Samsung sobre todo) hunde la velocidad de miniaturas y descargas.
+    @Suppress("DEPRECATION")
+    override fun onStart() {
+        super.onStart()
+        if (wifiLock?.isHeld == true) return
+        val wifi = applicationContext.getSystemService(WifiManager::class.java)
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wifi.createWifiLock(mode, "sonylivemonitor:gallery").also {
+            it.setReferenceCounted(false)
+            it.acquire()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        wifiLock?.let { if (it.isHeld) it.release() }
+        wifiLock = null
     }
 
     // La actividad no se recrea al girar (configChanges en el manifest): la camara
@@ -205,11 +231,11 @@ class CameraGalleryActivity : Activity() {
     }
 
     private fun enterContentsTransfer() {
-        runCatching { SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "stopLiveview") }
+        runCatching { SonyCamera.call(SonyCamera.cameraEndpoint, "stopLiveview") }
         var error: Exception? = null
         repeat(15) {
             try {
-                SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "setCameraFunction",
+                SonyCamera.call(SonyCamera.cameraEndpoint, "setCameraFunction",
                     JSONArray().put("Contents Transfer"))
                 return
             } catch (e: Exception) { error = e; Thread.sleep(400) }
@@ -246,7 +272,7 @@ class CameraGalleryActivity : Activity() {
         val request = JSONObject().put("uri", "storage:memoryCard1")
             .put("stIdx", start).put("cnt", PAGE_SIZE)
             .put("view", "flat").put("sort", "descending")
-        val result = SonyCamera.call(SonyCamera.CONTENT_ENDPOINT, "getContentList",
+        val result = SonyCamera.call(SonyCamera.avContentEndpoint, "getContentList",
             JSONArray().put(request), "1.3")
         val page = result.optJSONArray(0) ?: JSONArray()
         return Page(parsePage(page), page.length())
@@ -575,7 +601,7 @@ class CameraGalleryActivity : Activity() {
         closing = true; busy.visibility = View.VISIBLE; status.text = "Returning to remote shooting..."
         window.decorView.postDelayed({ if (!isFinishing) finish() }, 2500)
         apiExecutor.execute {
-            runCatching { SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "setCameraFunction",
+            runCatching { SonyCamera.call(SonyCamera.cameraEndpoint, "setCameraFunction",
                 JSONArray().put("Remote Shooting")) }
             runOnUiThread { if (!isFinishing) finish() }
         }

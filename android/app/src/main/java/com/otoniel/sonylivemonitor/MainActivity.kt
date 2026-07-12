@@ -82,6 +82,7 @@ class MainActivity : Activity() {
     @Volatile private var active = false
     @Volatile private var openingGallery = false
     private var worker: Thread? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     @Volatile private var directNetwork: Network? = null
@@ -116,6 +117,8 @@ class MainActivity : Activity() {
     @Volatile private var zoomTextUntil = 0L
 
     private lateinit var btnConnect: Button
+    private lateinit var btnGallery: Button
+    private val zoomChips = mutableListOf<Button>()
     private lateinit var btnGrid: Button
     private lateinit var btnMeter: Button
     private lateinit var btnHud: Button
@@ -177,12 +180,15 @@ class MainActivity : Activity() {
         super.onStart()
         openingGallery = false
         active = true
+        acquireWifiLock()
         worker = Thread(::monitorLoop, "monitor").also { it.start() }
     }
 
     override fun onStop() {
         super.onStop()
         active = false
+        wifiLock?.let { if (it.isHeld) it.release() }
+        wifiLock = null
         worker?.interrupt()
         worker = null
         networkCallback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
@@ -204,6 +210,28 @@ class MainActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemBars()
+    }
+
+    /**
+     * Mantiene el chip WiFi despierto mientras la app esta en primer plano.
+     * Sin esto, el ahorro de energia WiFi (agresivo en Samsung, sobre todo
+     * en redes sin internet como la de la camara) mete latencia a rafagas
+     * en el liveview. LOW_LATENCY solo actua con pantalla encendida y app
+     * en primer plano: exactamente el caso de uso de un monitor.
+     */
+    @Suppress("DEPRECATION")
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        val wifi = applicationContext.getSystemService(WifiManager::class.java)
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wifi.createWifiLock(mode, "sonylivemonitor:liveview").also {
+            it.setReferenceCounted(false)
+            it.acquire()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -341,8 +369,8 @@ class MainActivity : Activity() {
                 true
             }
         }
-        zoomChip("Z− (W)", "out")
-        zoomChip("Z+ (T)", "in")
+        zoomChips += zoomChip("Z− (W)", "out")
+        zoomChips += zoomChip("Z+ (T)", "in")
 
         // Botones de la app, en el mismo panel para que nada flote sobre
         // el monitor. Conectar: un toque conecta con lo guardado; mantener
@@ -378,10 +406,11 @@ class MainActivity : Activity() {
             getPreferences(MODE_PRIVATE).edit().putBoolean("hud", hudOn).apply()
             btnHud.text = "HUD: ${if (hudOn) "on" else "off"}"
         }
-        chip("Camera card") {
+        btnGallery = chip("Camera card") {
             openingGallery = true
             startActivity(Intent(this, CameraGalleryActivity::class.java))
         }
+        chip("Diag") { showDiagnostics() }
 
         controlGrid = GridLayout(this)
 
@@ -469,7 +498,7 @@ class MainActivity : Activity() {
         setStripOwner(setting, chips[setting])
         apiExecutor.execute {
             try {
-                val r = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, setting.getMethod)
+                val r = SonyCamera.call(SonyCamera.cameraEndpoint, setting.getMethod)
                 val current = r.getString(0)
                 val candidates = r.getJSONArray(1)
                 val values = List(candidates.length()) { candidates.getString(it) }
@@ -569,7 +598,7 @@ class MainActivity : Activity() {
         setStripOwner("EV", chipEv)
         apiExecutor.execute {
             try {
-                val r = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getAvailableExposureCompensation")
+                val r = SonyCamera.call(SonyCamera.cameraEndpoint, "getAvailableExposureCompensation")
                 val current = r.getInt(0)
                 val max = r.getInt(1)
                 val min = r.getInt(2)
@@ -600,7 +629,7 @@ class MainActivity : Activity() {
         setStripOwner("WB", chipWb)
         apiExecutor.execute {
             try {
-                val r = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getAvailableWhiteBalance")
+                val r = SonyCamera.call(SonyCamera.cameraEndpoint, "getAvailableWhiteBalance")
                 val current = r.getJSONObject(0).getString("whiteBalanceMode")
                 val cand = r.getJSONArray(1)
                 val modes = List(cand.length()) { cand.getJSONObject(it).getString("whiteBalanceMode") }
@@ -611,7 +640,7 @@ class MainActivity : Activity() {
                                 // Para "Color Temperature" hace falta un kelvin: 5500 por defecto
                                 val temp = mode == "Color Temperature"
                                 SonyCamera.call(
-                                    SonyCamera.DEFAULT_ENDPOINT, "setWhiteBalance",
+                                    SonyCamera.cameraEndpoint, "setWhiteBalance",
                                     JSONArray().put(mode).put(temp).put(if (temp) 5500 else 0),
                                 )
                                 runOnUiThread {
@@ -640,7 +669,7 @@ class MainActivity : Activity() {
         setStripOwner("MODE", chipShootMode)
         apiExecutor.execute {
             try {
-                val r = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getAvailableShootMode")
+                val r = SonyCamera.call(SonyCamera.cameraEndpoint, "getAvailableShootMode")
                 val current = r.getString(0)
                 val cand = r.getJSONArray(1)
                 val modes = List(cand.length()) { cand.getString(it) }
@@ -667,7 +696,7 @@ class MainActivity : Activity() {
         apiExecutor.execute {
             runCatching {
                 SonyCamera.call(
-                    SonyCamera.DEFAULT_ENDPOINT, "actZoom",
+                    SonyCamera.cameraEndpoint, "actZoom",
                     JSONArray().put(direction).put(movement),
                 )
             }.onFailure {
@@ -688,7 +717,7 @@ class MainActivity : Activity() {
     private fun pollZoomPosition() {
         apiExecutor.execute {
             runCatching {
-                val r = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false))
+                val r = SonyCamera.call(SonyCamera.cameraEndpoint, "getEvent", JSONArray().put(false))
                 for (i in 0 until r.length()) {
                     val o = r.optJSONObject(i) ?: continue
                     if (o.has("zoomPosition")) {
@@ -708,7 +737,7 @@ class MainActivity : Activity() {
     private fun applySetting(setMethod: String, value: Any, onOk: () -> Unit) {
         apiExecutor.execute {
             try {
-                SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, setMethod, JSONArray().put(value))
+                SonyCamera.call(SonyCamera.cameraEndpoint, setMethod, JSONArray().put(value))
                 runOnUiThread(onOk)
             } catch (e: Exception) {
                 toast("Error: ${e.message}")
@@ -734,13 +763,13 @@ class MainActivity : Activity() {
             settings.forEach { setting ->
                 runCatching {
                     currentByTitle[setting.title] = SonyCamera.call(
-                        SonyCamera.DEFAULT_ENDPOINT, setting.currentMethod,
+                        SonyCamera.cameraEndpoint, setting.currentMethod,
                     ).get(0).toString()
                 }
             }
             runCatching {
                 val events = SonyCamera.call(
-                    SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false), version = "1.1",
+                    SonyCamera.cameraEndpoint, "getEvent", JSONArray().put(false), version = "1.1",
                 )
                 for (i in 0 until events.length()) {
                     val event = events.optJSONObject(i) ?: continue
@@ -755,7 +784,7 @@ class MainActivity : Activity() {
                 if (!currentByTitle.containsKey(s.title)) {
                     runCatching {
                         currentByTitle[s.title] = SonyCamera.call(
-                            SonyCamera.DEFAULT_ENDPOINT, s.getMethod,
+                            SonyCamera.cameraEndpoint, s.getMethod,
                         ).get(0).toString()
                     }
                 }
@@ -766,20 +795,61 @@ class MainActivity : Activity() {
                 }
             }
             runCatching {
-                val r = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getAvailableExposureCompensation")
+                val r = SonyCamera.call(SonyCamera.cameraEndpoint, "getAvailableExposureCompensation")
                 val stepEv = if (r.getInt(3) == 2) 0.5 else 1.0 / 3.0
                 val label = String.format("%+.1f EV", r.getInt(0) * stepEv)
                 runOnUiThread { chipEv.text = label }
             }
             runCatching {
-                val mode = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getAvailableWhiteBalance")
+                val mode = SonyCamera.call(SonyCamera.cameraEndpoint, "getAvailableWhiteBalance")
                     .getJSONObject(0).getString("whiteBalanceMode")
                 runOnUiThread { chipWb.text = "WB ${mode.removeSuffix(" WB")}" }
             }
             runCatching {
-                val mode = SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getAvailableShootMode").getString(0)
+                val mode = SonyCamera.call(SonyCamera.cameraEndpoint, "getAvailableShootMode").getString(0)
                 shootMode = mode
                 runOnUiThread { chipShootMode.text = if (mode == "movie") "Mode: Video" else "Mode: Photo" }
+            }
+            applyCapabilities()
+        }
+    }
+
+    /** Esconde lo que esta camara no soporta (galeria, zoom motorizado...). */
+    private fun applyCapabilities() {
+        val showGallery = SonyCamera.supports("setCameraFunction")
+        val showZoom = SonyCamera.supports("actZoom")
+        runOnUiThread {
+            btnGallery.visibility = if (showGallery) View.VISIBLE else View.GONE
+            zoomChips.forEach { it.visibility = if (showZoom) View.VISIBLE else View.GONE }
+        }
+    }
+
+    /** Informe de la camara conectada, pensado para que testers lo compartan. */
+    private fun showDiagnostics() {
+        toast("Reading camera info...")
+        apiExecutor.execute {
+            val report = SonyCamera.diagnostics()
+            runOnUiThread {
+                AlertDialog.Builder(this)
+                    .setTitle(SonyCamera.modelName ?: "Camera diagnostics")
+                    .setMessage(report)
+                    .setPositiveButton("Share") { _, _ ->
+                        startActivity(Intent.createChooser(
+                            Intent(Intent.ACTION_SEND)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_TEXT, report),
+                            "Share diagnostics",
+                        ))
+                    }
+                    .setNeutralButton("Copy") { _, _ ->
+                        val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                        clipboard.setPrimaryClip(
+                            android.content.ClipData.newPlainText("diagnostics", report)
+                        )
+                        toast("Copied")
+                    }
+                    .setNegativeButton("Close", null)
+                    .show()
             }
         }
     }
@@ -795,7 +865,7 @@ class MainActivity : Activity() {
                 val values = mutableMapOf<String, String>()
                 runCatching {
                     val events = SonyCamera.call(
-                        SonyCamera.DEFAULT_ENDPOINT, "getEvent", JSONArray().put(false), version = "1.1",
+                        SonyCamera.cameraEndpoint, "getEvent", JSONArray().put(false), version = "1.1",
                     )
                     val keys = mapOf(
                         "ISO" to "currentIsoSpeedRate",
@@ -815,11 +885,11 @@ class MainActivity : Activity() {
                     if (!values.containsKey(setting.title)) {
                         runCatching {
                             values[setting.title] = SonyCamera.call(
-                                SonyCamera.DEFAULT_ENDPOINT, setting.currentMethod,
+                                SonyCamera.cameraEndpoint, setting.currentMethod,
                             ).get(0).toString()
                         }.recoverCatching {
                             values[setting.title] = SonyCamera.call(
-                                SonyCamera.DEFAULT_ENDPOINT, setting.getMethod,
+                                SonyCamera.cameraEndpoint, setting.getMethod,
                             ).get(0).toString()
                         }
                     }
@@ -841,11 +911,11 @@ class MainActivity : Activity() {
             apiExecutor.execute {
                 try {
                     if (movieRecording) {
-                        SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "stopMovieRec")
+                        SonyCamera.call(SonyCamera.cameraEndpoint, "stopMovieRec")
                         movieRecording = false
                         toast("Recording stopped")
                     } else {
-                        SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "startMovieRec")
+                        SonyCamera.call(SonyCamera.cameraEndpoint, "startMovieRec")
                         movieRecording = true
                         toast("Recording...")
                     }
@@ -859,7 +929,7 @@ class MainActivity : Activity() {
         capturing = true
         apiExecutor.execute {
             try {
-                SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "actTakePicture")
+                SonyCamera.call(SonyCamera.cameraEndpoint, "actTakePicture")
                 toast("Photo taken")
                 refreshChips()  // los valores pueden cambiar tras el disparo (p.ej. ISO auto)
             } catch (e: Exception) {
@@ -988,9 +1058,7 @@ class MainActivity : Activity() {
                 directNetwork = network
                 connectivity.bindProcessToNetwork(network)
                 apiExecutor.execute {
-                    val ok = runCatching {
-                        SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getVersions")
-                    }.isSuccess
+                    val ok = SonyCamera.locate()
                     runOnUiThread {
                         btnConnect.text = if (ok) "Disconnect" else "Searching..."
                         if (!ok) toast("Connected WiFi, but the camera did not respond")
@@ -1091,9 +1159,7 @@ class MainActivity : Activity() {
                 // La WiFi disponible puede ser aun la de casa: confirmar que
                 // de verdad se llega a la camara antes de dar el OK.
                 apiExecutor.execute {
-                    val ok = runCatching {
-                        SonyCamera.call(SonyCamera.DEFAULT_ENDPOINT, "getVersions")
-                    }.isSuccess
+                    val ok = SonyCamera.locate()
                     runOnUiThread { btnConnect.text = if (ok) "Disconnect" else "Searching..." }
                 }
             }
@@ -1131,6 +1197,7 @@ class MainActivity : Activity() {
             270 -> 1 - w to u
             else -> u to w
         }
+        if (!SonyCamera.supports("setTouchAFPosition")) return true
         val xPct = fx * 100.0
         val yPct = fy * 100.0
         focusMarker = ev.x to ev.y
@@ -1138,7 +1205,7 @@ class MainActivity : Activity() {
         apiExecutor.execute {
             try {
                 SonyCamera.call(
-                    SonyCamera.DEFAULT_ENDPOINT, "setTouchAFPosition",
+                    SonyCamera.cameraEndpoint, "setTouchAFPosition",
                     JSONArray().put(xPct).put(yPct),
                 )
             } catch (e: Exception) {
@@ -1161,7 +1228,10 @@ class MainActivity : Activity() {
                 drawMessage("Waiting for camera WiFi...\n(Connect button in the panel)")
                 bindToWifi()
                 drawMessage("Connecting to the camera...")
-                val url = SonyCamera.startLiveview(SonyCamera.DEFAULT_ENDPOINT)
+                if (!SonyCamera.locate()) {
+                    throw CameraException("Camera not found on this WiFi")
+                }
+                val url = SonyCamera.startLiveview(SonyCamera.cameraEndpoint)
                 refreshChips()
                 streamAndRender(url)
             } catch (e: InterruptedException) {
