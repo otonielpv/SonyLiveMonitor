@@ -11,6 +11,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -351,7 +352,7 @@ class CameraGalleryActivity : Activity() {
         var index = images.indexOf(item).coerceAtLeast(0)
         var generation = 0
         val image = ZoomImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER; setBackgroundColor(Color.BLACK)
+            setBackgroundColor(Color.BLACK)
         }
         val spinner = ProgressBar(this)
         val title = TextView(this).apply {
@@ -415,47 +416,101 @@ class CameraGalleryActivity : Activity() {
         /** -1 = foto anterior, +1 = foto siguiente. Solo se emite sin zoom. */
         var onSwipe: ((Int) -> Unit)? = null
         private var zoom = 1f
+        private var panX = 0f
+        private var panY = 0f
         private var lastX = 0f
         private var lastY = 0f
         private var downX = 0f
         private var downY = 0f
         private var multiTouch = false
         private val swipeThreshold = 80 * context.resources.displayMetrics.density
+        private val zoomMatrix = Matrix()
         private val scaleDetector = ScaleGestureDetector(context,
             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
-                    zoom = (zoom * detector.scaleFactor).coerceIn(1f, 6f)
-                    scaleX = zoom; scaleY = zoom
-                    if (zoom == 1f) { translationX = 0f; translationY = 0f }
+                    val previous = zoom
+                    val next = (previous * detector.scaleFactor).coerceIn(1f, 6f)
+                    val factor = next / previous
+                    // Conserva bajo los dedos el mismo punto de la fotografia.
+                    // La vista no se transforma: solo cambia la matriz del bitmap.
+                    val focusFromCenterX = detector.focusX - width / 2f
+                    val focusFromCenterY = detector.focusY - height / 2f
+                    panX = focusFromCenterX - (focusFromCenterX - panX) * factor
+                    panY = focusFromCenterY - (focusFromCenterY - panY) * factor
+                    zoom = next
+                    if (zoom == 1f) { panX = 0f; panY = 0f }
+                    applyImageMatrix()
                     return true
                 }
             })
 
+        init { scaleType = ScaleType.MATRIX }
+
         fun resetZoom() {
-            zoom = 1f; scaleX = 1f; scaleY = 1f; translationX = 0f; translationY = 0f
+            zoom = 1f; panX = 0f; panY = 0f
+            applyImageMatrix()
+        }
+
+        override fun setImageBitmap(bm: Bitmap?) {
+            super.setImageBitmap(bm)
+            // El preview grande sustituye a la miniatura de forma asincrona.
+            // Recalcular mantiene el zoom actual aunque cambie la resolucion.
+            post { applyImageMatrix() }
+        }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            applyImageMatrix()
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             scaleDetector.onTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    lastX = event.x; lastY = event.y
-                    downX = event.x; downY = event.y; multiTouch = false
+                    lastX = event.rawX; lastY = event.rawY
+                    downX = event.rawX; downY = event.rawY; multiTouch = false
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> multiTouch = true
-                MotionEvent.ACTION_MOVE -> if (!scaleDetector.isInProgress && zoom > 1f) {
-                    translationX += event.x - lastX; translationY += event.y - lastY
-                    lastX = event.x; lastY = event.y
+                MotionEvent.ACTION_MOVE -> {
+                    // rawX/rawY permanecen en coordenadas de pantalla aunque la
+                    // propia ImageView este escalada. Las coordenadas locales se
+                    // encogen con el zoom y hacian que el paneo pareciese lento.
+                    if (!scaleDetector.isInProgress && zoom > 1f) {
+                        panX += event.rawX - lastX
+                        panY += event.rawY - lastY
+                        applyImageMatrix()
+                    }
+                    lastX = event.rawX; lastY = event.rawY
                 }
                 MotionEvent.ACTION_UP -> {
-                    val dx = event.x - downX
-                    val dy = event.y - downY
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
                     if (zoom == 1f && !multiTouch && abs(dx) > swipeThreshold && abs(dx) > abs(dy) * 2) {
                         onSwipe?.invoke(if (dx < 0) 1 else -1)
                     } else performClick()
                 }
             }
             return true
+        }
+
+        /** Encaja, amplia y limita la foto sin transformar la propia vista tactil. */
+        private fun applyImageMatrix() {
+            val d = drawable ?: return
+            if (width <= 0 || height <= 0 || d.intrinsicWidth <= 0 || d.intrinsicHeight <= 0) return
+            val fit = minOf(width.toFloat() / d.intrinsicWidth, height.toFloat() / d.intrinsicHeight)
+            val shownW = d.intrinsicWidth * fit * zoom
+            val shownH = d.intrinsicHeight * fit * zoom
+            val maxX = maxOf(0f, (shownW - width) / 2f)
+            val maxY = maxOf(0f, (shownH - height) / 2f)
+            panX = panX.coerceIn(-maxX, maxX)
+            panY = panY.coerceIn(-maxY, maxY)
+            val scale = fit * zoom
+            val left = (width - shownW) / 2f + panX
+            val top = (height - shownH) / 2f + panY
+            zoomMatrix.reset()
+            zoomMatrix.setScale(scale, scale)
+            zoomMatrix.postTranslate(left, top)
+            imageMatrix = zoomMatrix
         }
 
         override fun performClick(): Boolean { super.performClick(); return true }

@@ -21,6 +21,8 @@ Componentes:
 - Controles de camara: ISO, velocidad, apertura, compensacion EV y disparo
   (los valores disponibles se consultan a la camara segun el modo del dial).
 - Enfoque tactil tocando la imagen (setTouchAFPosition).
+- Focus peaking calculado en el movil, con color y sensibilidad configurables
+  (tambien funciona con objetivos manuales sin comunicacion electronica).
 - Con Smart Remote Control parcheado en la a6000, galeria completa de la
   tarjeta mediante `avContent` y descarga separada de JPEG y RAW/ARW.
 - Reconexion automatica y re-vinculacion a la WiFi activa si cambia de red.
@@ -62,7 +64,7 @@ mismo lector de liveview anti-lag (socket crudo con `TCP_NODELAY`, solo se
 conserva el frame mas reciente), mismos controles (ISO, velocidad, apertura,
 enfoque, flash, temporizador, EV, WB, modo foto/video), zoom motorizado,
 enfoque tactil, cuadriculas, HUD, medidor de exposicion, disparador
-flotante arrastrable y la misma galeria `Camera card` (avContent): miniaturas
+flotante arrastrable, focus peaking y la misma galeria `Camera card` (avContent): miniaturas
 paginadas, visor con zoom y paso de fotos deslizando, seleccion multiple y
 descarga de JPEG/RAW con dialogo de progreso que bloquea la pantalla.
 

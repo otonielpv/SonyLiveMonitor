@@ -52,6 +52,17 @@ class MainActivity : Activity() {
 
     private enum class Grid { OFF, TERCIOS, TERCIOS_DIAG, CRUZ }
 
+    private enum class PeakingColor(val label: String, val argb: Int) {
+        OFF("off", Color.TRANSPARENT),
+        RED("red", Color.argb(230, 255, 32, 32)),
+        YELLOW("yellow", Color.argb(230, 255, 220, 0)),
+        WHITE("white", Color.argb(235, 255, 255, 255)),
+    }
+
+    private enum class PeakingSensitivity(val label: String, val shortLabel: String, val threshold: Int) {
+        LOW("low", "L", 320), MEDIUM("medium", "M", 220), HIGH("high", "H", 140),
+    }
+
     /** Ajuste editable en vivo desde la barra inferior. */
     private class Setting(
         val title: String,
@@ -91,6 +102,8 @@ class MainActivity : Activity() {
 
     @Volatile private var grid = Grid.OFF
     @Volatile private var meterOn = false
+    @Volatile private var peakingColor = PeakingColor.OFF
+    @Volatile private var peakingSensitivity = PeakingSensitivity.MEDIUM
     @Volatile private var rotation = 0  // 0/90/180/270 grados de rotacion del render
     @Volatile private var capturing = false
     @Volatile private var lastFitRect = RectF()
@@ -121,6 +134,8 @@ class MainActivity : Activity() {
     private val zoomChips = mutableListOf<Button>()
     private lateinit var btnGrid: Button
     private lateinit var btnMeter: Button
+    private lateinit var btnPeaking: Button
+    private lateinit var btnPeakingSensitivity: Button
     private lateinit var btnHud: Button
     private lateinit var btnShutter: Button
     private val chips = mutableMapOf<Setting, Button>()
@@ -162,6 +177,74 @@ class MainActivity : Activity() {
     private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(255, 200, 0); strokeWidth = 4f; style = Paint.Style.STROKE
     }
+    private val peakingPaint = Paint().apply { isFilterBitmap = false }
+
+    /** Sobel sobre una imagen a media resolucion. Mantiene sus buffers para no
+     *  generar basura en cada frame y alterna dos mascaras para el compositor. */
+    private class FocusPeakingProcessor {
+        private var sourcePixels = IntArray(0)
+        private var luma = IntArray(0)
+        private var maskPixels = IntArray(0)
+        private var maskWidth = 0
+        private var maskHeight = 0
+        private var masks = arrayOfNulls<Bitmap>(2)
+        private var maskIndex = 0
+
+        fun compute(source: Bitmap, color: PeakingColor, sensitivity: PeakingSensitivity): Bitmap? {
+            if (color == PeakingColor.OFF || source.width < 6 || source.height < 6) return null
+            val sw = source.width
+            val sh = source.height
+            val w = sw / 2
+            val h = sh / 2
+            if (sourcePixels.size != sw * sh) sourcePixels = IntArray(sw * sh)
+            if (w != maskWidth || h != maskHeight) {
+                maskWidth = w; maskHeight = h
+                luma = IntArray(w * h)
+                maskPixels = IntArray(w * h)
+                masks = arrayOfNulls(2)
+                maskIndex = 0
+            }
+            source.getPixels(sourcePixels, 0, sw, 0, 0, sw, sh)
+            var y = 0
+            while (y < h) {
+                var x = 0
+                val srcRow = y * 2 * sw
+                val dstRow = y * w
+                while (x < w) {
+                    val c = sourcePixels[srcRow + x * 2]
+                    luma[dstRow + x] =
+                        ((c shr 16 and 0xFF) * 54 + (c shr 8 and 0xFF) * 183 +
+                            (c and 0xFF) * 19) shr 8
+                    x++
+                }
+                y++
+            }
+
+            maskPixels.fill(Color.TRANSPARENT)
+            y = 1
+            while (y < h - 1) {
+                var x = 1
+                while (x < w - 1) {
+                    val i = y * w + x
+                    val gx = -luma[i - w - 1] + luma[i - w + 1] -
+                        2 * luma[i - 1] + 2 * luma[i + 1] -
+                        luma[i + w - 1] + luma[i + w + 1]
+                    val gy = -luma[i - w - 1] - 2 * luma[i - w] - luma[i - w + 1] +
+                        luma[i + w - 1] + 2 * luma[i + w] + luma[i + w + 1]
+                    if (kotlin.math.abs(gx) + kotlin.math.abs(gy) >= sensitivity.threshold) {
+                        maskPixels[i] = color.argb
+                    }
+                    x++
+                }
+                y++
+            }
+            val bitmap = masks[maskIndex] ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                .also { masks[maskIndex] = it }
+            bitmap.setPixels(maskPixels, 0, w, 0, 0, w, h)
+            maskIndex = (maskIndex + 1) % masks.size
+            return bitmap
+        }
+    }
 
     // -- ciclo de vida -----------------------------------------------------------
 
@@ -172,6 +255,12 @@ class MainActivity : Activity() {
 
         grid = Grid.entries[getPreferences(MODE_PRIVATE).getInt("grid", 0)]
         meterOn = getPreferences(MODE_PRIVATE).getBoolean("meter", false)
+        peakingColor = PeakingColor.entries.getOrElse(
+            getPreferences(MODE_PRIVATE).getInt("peaking_color", 0)
+        ) { PeakingColor.OFF }
+        peakingSensitivity = PeakingSensitivity.entries.getOrElse(
+            getPreferences(MODE_PRIVATE).getInt("peaking_sensitivity", 1)
+        ) { PeakingSensitivity.MEDIUM }
         rotation = getPreferences(MODE_PRIVATE).getInt("rot", 0)
         hudOn = getPreferences(MODE_PRIVATE).getBoolean("hud", true)
 
@@ -409,6 +498,19 @@ class MainActivity : Activity() {
             meterOn = !meterOn
             getPreferences(MODE_PRIVATE).edit().putBoolean("meter", meterOn).apply()
             btnMeter.text = "Meter: ${if (meterOn) "on" else "off"}"
+        }
+        btnPeaking = chip("Peak: ${peakingColor.label}") {
+            peakingColor = PeakingColor.entries[(peakingColor.ordinal + 1) % PeakingColor.entries.size]
+            getPreferences(MODE_PRIVATE).edit().putInt("peaking_color", peakingColor.ordinal).apply()
+            btnPeaking.text = "Peak: ${peakingColor.label}"
+        }
+        btnPeakingSensitivity = chip("Peak sens: ${peakingSensitivity.shortLabel}") {
+            peakingSensitivity = PeakingSensitivity.entries[
+                (peakingSensitivity.ordinal + 1) % PeakingSensitivity.entries.size
+            ]
+            getPreferences(MODE_PRIVATE).edit()
+                .putInt("peaking_sensitivity", peakingSensitivity.ordinal).apply()
+            btnPeakingSensitivity.text = "Peak sens: ${peakingSensitivity.shortLabel}"
         }
         btnHud = chip("HUD: ${if (hudOn) "on" else "off"}") {
             hudOn = !hudOn
@@ -1303,6 +1405,9 @@ class MainActivity : Activity() {
         var exposure: Exposure? = null
         var lastMeterAt = 0L
         var lastCameraStateAt = 0L
+        val peakingProcessor = FocusPeakingProcessor()
+        var peakingOverlay: Bitmap? = null
+        var lastPeakingAt = 0L
 
         try {
             while (active) {
@@ -1317,12 +1422,12 @@ class MainActivity : Activity() {
                         // Reset del contador para no forzar reconexion tras
                         // una exposicion larga.
                         lastFrameAt = now
-                        drawFrame(bitmap, "CAPTURING...", fps, -1, stream.framesDropped, exposure)
+                        drawFrame(bitmap, "CAPTURING...", fps, -1, stream.framesDropped, exposure, peakingOverlay)
                         continue
                     }
                     if (stalled > 20_000) throw IllegalStateException("no frames for 20s")
                     if (stalled > 1200) {
-                        drawFrame(bitmap, "NO SIGNAL ${stalled / 1000}s (${stream.status})", fps, -1, stream.framesDropped, exposure)
+                        drawFrame(bitmap, "NO SIGNAL ${stalled / 1000}s (${stream.status})", fps, -1, stream.framesDropped, exposure, peakingOverlay)
                     }
                     continue
                 }
@@ -1364,7 +1469,15 @@ class MainActivity : Activity() {
                     }
                     else -> exposure
                 }
-                drawFrame(bitmap, null, fps, ageMs, stream.framesDropped, exposure)
+                peakingOverlay = when {
+                    peakingColor == PeakingColor.OFF -> null
+                    now - lastPeakingAt >= 70 -> {
+                        lastPeakingAt = now
+                        peakingProcessor.compute(bitmap, peakingColor, peakingSensitivity)
+                    }
+                    else -> peakingOverlay
+                }
+                drawFrame(bitmap, null, fps, ageMs, stream.framesDropped, exposure, peakingOverlay)
             }
         } finally {
             stream.stop()
@@ -1389,6 +1502,7 @@ class MainActivity : Activity() {
     private fun drawFrame(
         bitmap: Bitmap?, alert: String?, fps: Float, ageMs: Long, dropped: Int,
         exposure: Exposure? = null,
+        peakingOverlay: Bitmap? = null,
     ) {
         val holder = surface.holder
         if (holder.surface?.isValid != true) return
@@ -1416,9 +1530,11 @@ class MainActivity : Activity() {
                     canvas.save()
                     canvas.rotate(rotation.toFloat(), cx, cy)
                     canvas.drawBitmap(bitmap, null, dst, bitmapPaint)
+                    peakingOverlay?.let { canvas.drawBitmap(it, null, dst, peakingPaint) }
                     canvas.restore()
                 } else {
                     canvas.drawBitmap(bitmap, null, dst, bitmapPaint)
+                    peakingOverlay?.let { canvas.drawBitmap(it, null, dst, peakingPaint) }
                 }
                 // Caja ocupada en pantalla (para cuadricula y enfoque tactil)
                 lastFitRect = if (swap) RectF(cx - h / 2, cy - w / 2, cx + h / 2, cy + w / 2) else dst

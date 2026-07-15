@@ -14,6 +14,56 @@ enum GridMode: Int, CaseIterable {
     }
 }
 
+enum PeakingColor: Int, CaseIterable {
+    case off, red, yellow, white
+
+    var label: String {
+        switch self {
+        case .off: return "off"
+        case .red: return "red"
+        case .yellow: return "yellow"
+        case .white: return "white"
+        }
+    }
+
+    var rgba: (UInt8, UInt8, UInt8, UInt8) {
+        switch self {
+        case .off: return (0, 0, 0, 0)
+        case .red: return (255, 32, 32, 230)
+        case .yellow: return (255, 220, 0, 230)
+        case .white: return (255, 255, 255, 235)
+        }
+    }
+}
+
+enum PeakingSensitivity: Int, CaseIterable {
+    case low, medium, high
+
+    var label: String {
+        switch self {
+        case .low: return "low"
+        case .medium: return "medium"
+        case .high: return "high"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .low: return "L"
+        case .medium: return "M"
+        case .high: return "H"
+        }
+    }
+
+    var threshold: Int {
+        switch self {
+        case .low: return 320
+        case .medium: return 220
+        case .high: return 140
+        }
+    }
+}
+
 struct Exposure {
     let hist: [Int]           // 64 bins de luminancia
     let evOffset: Float       // desviacion respecto al gris medio (18%)
@@ -62,6 +112,7 @@ final class MonitorViewModel: ObservableObject {
     // -- estado publicado (solo se toca en el hilo principal) --------------------
 
     @Published var image: UIImage?
+    @Published var peakingImage: UIImage?
     @Published var hudText: String?
     @Published var alertText: String?
     @Published var statusMessage: String? = "Waiting for the camera WiFi..."
@@ -74,6 +125,8 @@ final class MonitorViewModel: ObservableObject {
     @Published var rotation: Int
     @Published var grid: GridMode
     @Published var meterOn: Bool
+    @Published var peakingColor: PeakingColor
+    @Published var peakingSensitivity: PeakingSensitivity
     @Published var hudOn: Bool
     @Published var shootMode = "still"
     @Published var movieRecording = false
@@ -102,7 +155,7 @@ final class MonitorViewModel: ObservableObject {
     // UIImage por frame y puede terminar agotando memoria y congelando la UI.
     private let framePublishLock = NSLock()
     private var framePublishScheduled = false
-    private var pendingFramePublish: (UIImage?, String?, String)?
+    private var pendingFramePublish: (UIImage?, UIImage?, String?, String)?
     private let exposureRefreshLock = NSLock()
     private var exposureRefreshPending = false
 
@@ -110,6 +163,12 @@ final class MonitorViewModel: ObservableObject {
         rotation = defaults.integer(forKey: "rot")
         grid = GridMode(rawValue: defaults.integer(forKey: "grid")) ?? .off
         meterOn = defaults.bool(forKey: "meter")
+        peakingColor = PeakingColor(rawValue: defaults.integer(forKey: "peakingColor")) ?? .off
+        peakingSensitivity = PeakingSensitivity(
+            rawValue: defaults.object(forKey: "peakingSensitivity") == nil
+                ? PeakingSensitivity.medium.rawValue
+                : defaults.integer(forKey: "peakingSensitivity")
+        ) ?? .medium
         hudOn = defaults.object(forKey: "hud") == nil ? true : defaults.bool(forKey: "hud")
         for s in Self.settings { chipLabels[s.id] = s.id }
         chipLabels["EV"] = "EV"
@@ -160,6 +219,21 @@ final class MonitorViewModel: ObservableObject {
         if !meterOn { exposure = nil }
     }
 
+    func cyclePeakingColor() {
+        peakingColor = PeakingColor(
+            rawValue: (peakingColor.rawValue + 1) % PeakingColor.allCases.count
+        ) ?? .off
+        defaults.set(peakingColor.rawValue, forKey: "peakingColor")
+        if peakingColor == .off { peakingImage = nil }
+    }
+
+    func cyclePeakingSensitivity() {
+        peakingSensitivity = PeakingSensitivity(
+            rawValue: (peakingSensitivity.rawValue + 1) % PeakingSensitivity.allCases.count
+        ) ?? .medium
+        defaults.set(peakingSensitivity.rawValue, forKey: "peakingSensitivity")
+    }
+
     func toggleHud() {
         hudOn.toggle()
         defaults.set(hudOn, forKey: "hud")
@@ -203,6 +277,8 @@ final class MonitorViewModel: ObservableObject {
         var lastFrameAt = fpsWindowStart
         var lastMeterAt: TimeInterval = 0
         var lastCameraStateAt: TimeInterval = 0
+        var lastPeakingAt: TimeInterval = 0
+        var peakingOverlay: UIImage?
         // Ventana para la salud del enlace: contamos "huecos" (intervalos entre
         // frames mayores de 120 ms, ~3x el periodo a 25 fps) y drops por segundo.
         var linkWindowStart = fpsWindowStart
@@ -265,17 +341,27 @@ final class MonitorViewModel: ObservableObject {
                 DispatchQueue.main.async { self.exposure = exp }
             }
 
-            publishFrame(decoded, alert: nil, fps: fps, ageMs: ageMs, dropped: stream.framesDropped)
+            if peakingColor == .off {
+                peakingOverlay = nil
+            } else if now - lastPeakingAt >= 0.07, let cg = decoded.cgImage {
+                lastPeakingAt = now
+                peakingOverlay = FocusPeaking.compute(cg, color: peakingColor,
+                                                       sensitivity: peakingSensitivity)
+            }
+
+            publishFrame(decoded, peaking: peakingOverlay, alert: nil, fps: fps,
+                         ageMs: ageMs, dropped: stream.framesDropped)
         }
     }
 
-    private func publishFrame(_ image: UIImage?, alert: String?, fps: Float, ageMs: Int, dropped: Int) {
+    private func publishFrame(_ image: UIImage?, peaking: UIImage? = nil, alert: String?,
+                              fps: Float, ageMs: Int, dropped: Int) {
         let hud = ageMs >= 0
             ? String(format: "%.1f fps | age %d ms | drops %d", fps, ageMs, dropped)
             : String(format: "%.1f fps | drops %d", fps, dropped)
 
         framePublishLock.lock()
-        pendingFramePublish = (image, alert, hud)
+        pendingFramePublish = (image, peaking, alert, hud)
         let shouldSchedule = !framePublishScheduled
         if shouldSchedule { framePublishScheduled = true }
         framePublishLock.unlock()
@@ -288,9 +374,10 @@ final class MonitorViewModel: ObservableObject {
             self.framePublishScheduled = false
             self.framePublishLock.unlock()
 
-            guard let (image, alert, hud) = update else { return }
+            guard let (image, peaking, alert, hud) = update else { return }
             self.statusMessage = nil
             if let image { self.image = image }
+            self.peakingImage = peaking
             self.hudText = hud
             self.alertText = alert
         }
@@ -696,6 +783,65 @@ final class MonitorViewModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
                 if self.toastGeneration == generation { self.toast = nil }
             }
+        }
+    }
+}
+
+// -- focus peaking calculado integramente en el movil -----------------------------
+
+enum FocusPeaking {
+    /// Sobel sobre el frame a media resolucion. A esta escala conserva detalle
+    /// suficiente para enfocar y reduce mucho el coste frente al JPEG completo.
+    static func compute(_ image: CGImage, color: PeakingColor,
+                        sensitivity: PeakingSensitivity) -> UIImage? {
+        guard color != .off else { return nil }
+        let width = image.width / 2
+        let height = image.height / 2
+        guard width >= 3, height >= 3 else { return nil }
+
+        var luma = [UInt8](repeating: 0, count: width * height)
+        let drewImage = luma.withUnsafeMutableBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress,
+                  let ctx = CGContext(data: base, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: width,
+                                      space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            ctx.interpolationQuality = .low
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drewImage else { return nil }
+
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+        let (red, green, blue, alpha) = color.rgba
+        // El contexto de salida usa alpha premultiplicado.
+        let outR = UInt8(Int(red) * Int(alpha) / 255)
+        let outG = UInt8(Int(green) * Int(alpha) / 255)
+        let outB = UInt8(Int(blue) * Int(alpha) / 255)
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let i = y * width + x
+                let gx = -Int(luma[i - width - 1]) + Int(luma[i - width + 1])
+                    - 2 * Int(luma[i - 1]) + 2 * Int(luma[i + 1])
+                    - Int(luma[i + width - 1]) + Int(luma[i + width + 1])
+                let gy = -Int(luma[i - width - 1]) - 2 * Int(luma[i - width])
+                    - Int(luma[i - width + 1]) + Int(luma[i + width - 1])
+                    + 2 * Int(luma[i + width]) + Int(luma[i + width + 1])
+                guard abs(gx) + abs(gy) >= sensitivity.threshold else { continue }
+                let p = i * 4
+                rgba[p] = outR; rgba[p + 1] = outG; rgba[p + 2] = outB; rgba[p + 3] = alpha
+            }
+        }
+
+        return rgba.withUnsafeMutableBytes { bytes -> UIImage? in
+            guard let base = bytes.baseAddress,
+                  let ctx = CGContext(data: base, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                                        | CGBitmapInfo.byteOrder32Big.rawValue),
+                  let mask = ctx.makeImage() else { return nil }
+            return UIImage(cgImage: mask)
         }
     }
 }

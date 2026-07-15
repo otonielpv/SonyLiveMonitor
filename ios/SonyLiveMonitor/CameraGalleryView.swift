@@ -538,46 +538,48 @@ private struct GalleryViewer: View {
     private var image: GalleryImage { model.images[index] }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            Group {
-                if let shown = preview ?? model.thumbs[image.thumbnail] {
-                    Image(uiImage: shown)
-                        .resizable()
-                        .scaledToFit()
-                        .scaleEffect(zoom)
-                        .offset(pan)
+        GeometryReader { geo in
+            ZStack {
+                Color.black.ignoresSafeArea()
+                Group {
+                    if let shown = preview ?? model.thumbs[image.thumbnail] {
+                        Image(uiImage: shown)
+                            .resizable()
+                            .scaledToFit()
+                            .scaleEffect(zoom)
+                            .offset(pan)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .clipped()
-            .gesture(magnify.simultaneously(with: drag))
-            if loading {
-                ProgressView().tint(.white)
-            }
-            VStack {
-                Text(image.jpeg?.fileName ?? image.raw?.fileName ?? "Camera photo")
-                    .font(.system(size: 16))
-                    .foregroundColor(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .clipped()
+                .gesture(magnify(container: geo.size).simultaneously(with: drag(container: geo.size)))
+                if loading {
+                    ProgressView().tint(.white)
+                }
+                VStack {
+                    Text(image.jpeg?.fileName ?? image.raw?.fileName ?? "Camera photo")
+                        .font(.system(size: 16))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.7))
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Button("Close") { model.viewerIndex = nil }
+                        if let jpeg = image.jpeg {
+                            Button("Save JPEG") { model.enqueue([(image, jpeg)]) }
+                        }
+                        if let raw = image.raw {
+                            Button("Save RAW") { model.enqueue([(image, raw)]) }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                     .background(Color.black.opacity(0.7))
-                Spacer()
-                HStack(spacing: 8) {
-                    Button("Close") { model.viewerIndex = nil }
-                    if let jpeg = image.jpeg {
-                        Button("Save JPEG") { model.enqueue([(image, jpeg)]) }
-                    }
-                    if let raw = image.raw {
-                        Button("Save RAW") { model.enqueue([(image, raw)]) }
-                    }
                 }
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.7))
             }
         }
         // task(id:) recarga el preview al cambiar de foto y cancela el anterior,
@@ -595,21 +597,32 @@ private struct GalleryViewer: View {
         }
     }
 
-    private var magnify: some Gesture {
+    private func magnify(container: CGSize) -> some Gesture {
         MagnificationGesture()
             .onChanged { value in
                 zoom = min(max(zoomBase * value, 1), 6)
-                if zoom == 1 { pan = .zero; panBase = .zero }
+                if zoom == 1 {
+                    pan = .zero; panBase = .zero
+                } else {
+                    pan = clamped(pan, container: container, zoom: zoom)
+                }
             }
-            .onEnded { _ in zoomBase = zoom }
+            .onEnded { _ in
+                zoomBase = zoom
+                pan = clamped(pan, container: container, zoom: zoom)
+                panBase = pan
+            }
     }
 
-    private var drag: some Gesture {
+    private func drag(container: CGSize) -> some Gesture {
         DragGesture()
             .onChanged { g in
                 guard zoom > 1 else { return }
-                pan = CGSize(width: panBase.width + g.translation.width,
-                             height: panBase.height + g.translation.height)
+                pan = clamped(
+                    CGSize(width: panBase.width + g.translation.width,
+                           height: panBase.height + g.translation.height),
+                    container: container, zoom: zoom
+                )
             }
             .onEnded { g in
                 if zoom > 1 { panBase = pan; return }
@@ -619,5 +632,17 @@ private struct GalleryViewer: View {
                 let next = index + (dx < 0 ? 1 : -1)
                 if model.images.indices.contains(next) { model.viewerIndex = next }
             }
+    }
+
+    private func clamped(_ proposed: CGSize, container: CGSize, zoom: CGFloat) -> CGSize {
+        guard let shown = preview ?? model.thumbs[image.thumbnail],
+              shown.size.width > 0, shown.size.height > 0 else { return .zero }
+        let fit = min(container.width / shown.size.width, container.height / shown.size.height)
+        let shownWidth = shown.size.width * fit * zoom
+        let shownHeight = shown.size.height * fit * zoom
+        let maxX = max(0, (shownWidth - container.width) / 2)
+        let maxY = max(0, (shownHeight - container.height) / 2)
+        return CGSize(width: min(max(proposed.width, -maxX), maxX),
+                      height: min(max(proposed.height, -maxY), maxY))
     }
 }

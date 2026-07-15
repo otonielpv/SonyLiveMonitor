@@ -1,5 +1,43 @@
 # Release notes
 
+## v0.4
+
+**New**
+
+- **Focus peaking on Android and iOS** — edge highlighting is calculated from
+  the live-view frames entirely on the phone, so it also works with vintage
+  manual-focus lenses and requires no further camera-app patch. The control
+  offers red, yellow and white overlays plus low, medium and high sensitivity.
+- Peaking settings are remembered independently on each device. Processing is
+  performed on a reduced-resolution mask and rate-limited to preserve the
+  low-latency, latest-frame rendering strategy.
+
+**Fixed**
+
+- **Photo viewer pan on Android and iOS** — dragging a zoomed image now tracks
+  the finger at the expected speed and stops at the actual image edges instead
+  of feeling damped or allowing the photo to drift off-screen.
+- Android now uses an image matrix for pinch zoom, keeping the point beneath
+  the fingers stable and avoiding gesture jitter on devices such as the Oppo A5.
+
+**Notes**
+
+- Focus peaking runs entirely in the phone app. It works with the stock Smart
+  Remote camera app and does not require reinstalling or updating the patched
+  camera APK.
+
+**Downloads**
+
+- `SonyLiveMonitor-v0.4.apk` — Android phone app.
+- `SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk` — unchanged patched
+  camera app for card browsing/RAW support (install on the **camera** with
+  PMCA-RE, not on the phone).
+- `SonyLiveMonitor-v0.4-unsigned.ipa` — iOS, sideload with AltStore.
+
+See the [install guide](https://github.com/otonielpv/SonyLiveMonitor/blob/main/docs/a6000-live-monitor-guide.md).
+
+---
+
 ## v0.3
 
 **New**

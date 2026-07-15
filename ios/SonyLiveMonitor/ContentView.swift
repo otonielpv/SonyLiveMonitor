@@ -109,6 +109,15 @@ struct VideoArea: View {
                         .frame(width: fit.size.width, height: fit.size.height)
                         .rotationEffect(.degrees(Double(model.rotation)))
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    if let peaking = model.peakingImage {
+                        Image(uiImage: peaking)
+                            .resizable()
+                            .interpolation(.none)
+                            .frame(width: fit.size.width, height: fit.size.height)
+                            .rotationEffect(.degrees(Double(model.rotation)))
+                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                            .allowsHitTesting(false)
+                    }
                     GridOverlay(mode: model.grid, rect: fit.box)
                         .allowsHitTesting(false)
                     if let marker = model.focusMarker {
@@ -307,6 +316,10 @@ struct ControlPanel: View {
                 ChipButton(label: "Rot: \(model.rotation)°") { model.cycleRotation() }
                 ChipButton(label: "Grid: \(model.grid.label)") { model.cycleGrid() }
                 ChipButton(label: "Meter: \(model.meterOn ? "on" : "off")") { model.toggleMeter() }
+                ChipButton(label: "Peak: \(model.peakingColor.label)") { model.cyclePeakingColor() }
+                ChipButton(label: "Peak sens: \(model.peakingSensitivity.shortLabel)") {
+                    model.cyclePeakingSensitivity()
+                }
                 ChipButton(label: "HUD: \(model.hudOn ? "on" : "off")") { model.toggleHud() }
                 ChipButton(label: "Camera card") { model.openGallery() }
                 ChipButton(label: "Diagnostics") { model.runDiagnostics() }
