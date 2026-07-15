@@ -168,6 +168,9 @@ is unreachable.
   the full‑screen viewer, pinch to zoom, and **swipe left/right** between shots.
 - **Download JPEG / RAW:** select one or more photos, tap **Download**, choose JPEG,
   RAW, or JPEG+RAW. A centered progress dialog blocks the screen until it finishes.
+- **Delete from the camera card:** select one or more photos and tap **Delete**.
+  Android and iOS require a second confirmation because the operation cannot be
+  undone. The button appears only when the camera reports API support.
   - If you pick **RAW** and some selected photos have no RAW, those are skipped — the
     ones that do have RAW are downloaded. You only get a warning if *none* of the
     selection has RAW.

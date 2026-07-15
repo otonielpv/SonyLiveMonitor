@@ -10,12 +10,13 @@ struct GalleryOriginal: Hashable {
 }
 
 struct GalleryImage: Identifiable, Hashable {
+    let uri: String
     let created: String
     let thumbnail: String
     let preview: String
     let originals: [GalleryOriginal]
 
-    var id: String { originals.first?.url ?? thumbnail + created }
+    var id: String { uri }
     var jpeg: GalleryOriginal? { originals.first { $0.kind == "jpeg" } }
     var raw: GalleryOriginal? { originals.first { $0.kind == "raw" } }
 }
@@ -43,6 +44,7 @@ final class GalleryModel: ObservableObject {
     @Published var selectMode = false
     @Published var selected: Set<GalleryImage> = []
     @Published var download: DownloadState?
+    @Published var canDelete = false
     @Published var toast: String?
     @Published var viewerIndex: Int?
     @Published var customFolder = UserDefaults.standard.data(forKey: "download_bookmark") != nil
@@ -79,7 +81,13 @@ final class GalleryModel: ObservableObject {
                     Thread.sleep(forTimeInterval: 0.4)
                 }
             }
+            let methods = (try? SonyCamera.call("getMethodTypes", params: [""],
+                                                endpoint: SonyCamera.contentEndpoint)) ?? []
+            let supportsDelete = methods.contains { method in
+                (method as? [Any])?.first as? String == "deleteContent"
+            }
             DispatchQueue.main.async {
+                self.canDelete = supportsDelete
                 if let lastError {
                     self.busy = false
                     self.status = "Camera card unavailable"
@@ -136,7 +144,8 @@ final class GalleryModel: ObservableObject {
                 }
             var preview = content["largeUrl"] as? String ?? ""
             if preview.isEmpty { preview = originals.first { $0.kind == "jpeg" }?.url ?? "" }
-            return GalleryImage(created: item["createdTime"] as? String ?? "",
+            guard let uri = item["uri"] as? String, !uri.isEmpty else { return nil }
+            return GalleryImage(uri: uri, created: item["createdTime"] as? String ?? "",
                                 thumbnail: content["thumbnailUrl"] as? String ?? "",
                                 preview: preview, originals: originals)
         }
@@ -182,6 +191,55 @@ final class GalleryModel: ObservableObject {
     func toggleSelection(_ image: GalleryImage) {
         if selected.contains(image) { selected.remove(image) } else { selected.insert(image) }
         if selectMode { status = "\(selected.count) selected" }
+    }
+
+    func deleteSelected() {
+        deleteImages(images.filter { selected.contains($0) })
+    }
+
+    func deleteImage(_ image: GalleryImage) {
+        deleteImages([image])
+    }
+
+    private func deleteImages(_ items: [GalleryImage]) {
+        let targets = items.map(\.uri)
+        guard !targets.isEmpty else { return }
+        viewerIndex = nil
+        busy = true
+        status = "Deleting \(targets.count) from camera..."
+        apiQueue.async {
+            var failure: Error?
+            do {
+                for start in stride(from: 0, to: targets.count, by: 100) {
+                    let end = min(start + 100, targets.count)
+                    try SonyCamera.call("deleteContent", params: [["uri": Array(targets[start..<end])]],
+                                        endpoint: SonyCamera.contentEndpoint, version: "1.1")
+                }
+            } catch {
+                failure = error
+            }
+            Self.waitForCardReady()
+            DispatchQueue.main.async {
+                self.resetGallery()
+                if let failure { self.showToast("Delete failed: \(failure.localizedDescription)") }
+                self.loadNextPage()
+            }
+        }
+    }
+
+    private static func waitForCardReady() {
+        let request: [String: Any] = ["uri": "storage:memoryCard1", "stIdx": 0,
+                                      "cnt": 1, "view": "flat", "sort": "descending"]
+        for _ in 0..<20 {
+            if (try? SonyCamera.call("getContentList", params: [request],
+                                     endpoint: SonyCamera.contentEndpoint, version: "1.3")) != nil { return }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+    }
+
+    private func resetGallery() {
+        images.removeAll(); thumbs.removeAll(); selected.removeAll(); nextIndex = 0
+        loadingPage = false; canLoadMore = false; selectMode = false; viewerIndex = nil
     }
 
     // -- descargas ----------------------------------------------------------------
@@ -353,6 +411,7 @@ struct CameraGalleryView: View {
 
     @State private var askFormat = false
     @State private var askFolder = false
+    @State private var askDelete = false
     @State private var showFolderPicker = false
 
     var body: some View {
@@ -410,6 +469,12 @@ struct CameraGalleryView: View {
                 Button("Use Files > Sony Live Monitor") { model.clearFolder() }
             }
         }
+        .confirmationDialog("Delete from camera?", isPresented: $askDelete, titleVisibility: .visible) {
+            Button("Delete \(model.selected.count) photos", role: .destructive) { model.deleteSelected() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes the selected photos from the camera card and cannot be undone.")
+        }
         .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { model.setFolder(url) }
         }
@@ -433,16 +498,26 @@ struct CameraGalleryView: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 6) {
-            Button(model.selectMode ? "Cancel" : "Select") { model.toggleSelectMode() }
-                .frame(maxWidth: .infinity)
-            Button(model.selected.isEmpty ? "Download" : "Download (\(model.selected.count))") {
-                askFormat = true
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Button(model.selectMode ? "Cancel" : "Select") { model.toggleSelectMode() }
+                    .frame(maxWidth: .infinity)
+                if model.canDelete {
+                    Button(model.selected.isEmpty ? "Delete" : "Delete (\(model.selected.count))",
+                           role: .destructive) { askDelete = true }
+                        .frame(maxWidth: .infinity)
+                        .disabled(model.selected.isEmpty)
+                }
             }
-            .frame(maxWidth: .infinity)
-            .disabled(model.selected.isEmpty)
-            Button(model.customFolder ? "Folder: custom" : "Folder: default") { askFolder = true }
+            HStack(spacing: 6) {
+                Button(model.selected.isEmpty ? "Download" : "Download (\(model.selected.count))") {
+                    askFormat = true
+                }
                 .frame(maxWidth: .infinity)
+                .disabled(model.selected.isEmpty)
+                Button(model.customFolder ? "Folder: custom" : "Folder: default") { askFolder = true }
+                    .frame(maxWidth: .infinity)
+            }
         }
         .buttonStyle(.bordered)
         .tint(.white)
@@ -534,6 +609,7 @@ private struct GalleryViewer: View {
     @State private var zoomBase: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var panBase: CGSize = .zero
+    @State private var askDelete = false
 
     private var image: GalleryImage { model.images[index] }
 
@@ -573,6 +649,9 @@ private struct GalleryViewer: View {
                         if let raw = image.raw {
                             Button("Save RAW") { model.enqueue([(image, raw)]) }
                         }
+                        if model.canDelete {
+                            Button("Delete", role: .destructive) { askDelete = true }
+                        }
                     }
                     .buttonStyle(.bordered)
                     .tint(.white)
@@ -594,6 +673,13 @@ private struct GalleryViewer: View {
             guard !Task.isCancelled else { return }
             if let data, let ui = UIImage(data: data) { preview = ui }
             loading = false
+        }
+        .confirmationDialog("Delete from camera?", isPresented: $askDelete,
+                            titleVisibility: .visible) {
+            Button("Delete photo", role: .destructive) { model.deleteImage(image) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes the photo from the camera card and cannot be undone.")
         }
     }
 

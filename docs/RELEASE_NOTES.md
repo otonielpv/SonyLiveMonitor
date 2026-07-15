@@ -1,5 +1,32 @@
 # Release notes
 
+## v0.5
+
+**New**
+
+- **Delete from camera card on Android and iOS** — select one or more photos in
+  *Camera card*, or open an individual photo, and permanently delete it after an
+  explicit confirmation. The button is shown only when the camera reports
+  `deleteContent` support.
+
+**Notes**
+
+- Deleting a photo removes its associated files from the camera card and cannot
+  be undone. Protected files that the camera refuses to delete remain on the card.
+- This update only changes the Android and iOS phone apps. The patched camera APK
+  used for card browsing and RAW support is unchanged.
+
+**Downloads**
+
+- `SonyLiveMonitor-v0.5.apk` — Android phone app.
+- `SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk` — unchanged patched
+  camera app (install on the **camera** with PMCA-RE, not on the phone).
+- `SonyLiveMonitor-v0.5-unsigned.ipa` — iOS, sideload with AltStore.
+
+See the [install guide](https://github.com/otonielpv/SonyLiveMonitor/blob/main/docs/a6000-live-monitor-guide.md).
+
+---
+
 ## v0.4
 
 **New**
@@ -11,7 +38,6 @@
 - Peaking settings are remembered independently on each device. Processing is
   performed on a reduced-resolution mask and rate-limited to preserve the
   low-latency, latest-frame rendering strategy.
-
 **Fixed**
 
 - **Photo viewer pan on Android and iOS** — dragging a zoomed image now tracks

@@ -52,6 +52,7 @@ import kotlin.math.abs
 class CameraGalleryActivity : Activity() {
     private data class Original(val fileName: String, val kind: String, val url: String)
     private data class CameraImage(
+        val uri: String,
         val created: String,
         val thumbnail: String,
         val preview: String,
@@ -78,6 +79,7 @@ class CameraGalleryActivity : Activity() {
     private lateinit var more: Button
     private lateinit var selectButton: Button
     private lateinit var downloadButton: Button
+    private lateinit var deleteButton: Button
     private lateinit var folderButton: Button
     private var downloadDialog: Dialog? = null
     private lateinit var downloadImage: ImageView
@@ -94,6 +96,7 @@ class CameraGalleryActivity : Activity() {
     @Volatile private var loadingPage = false
     @Volatile private var nextIndex = 0
     private var selectMode = false
+    private var deleteSupported = false
     private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -150,6 +153,10 @@ class CameraGalleryActivity : Activity() {
         downloadButton = Button(this).apply {
             text = "Download"; isEnabled = false; setOnClickListener { chooseSelectedFormat() }
         }
+        deleteButton = Button(this).apply {
+            text = "Delete"; isEnabled = false; visibility = View.GONE
+            setOnClickListener { confirmDeleteSelected() }
+        }
         folderButton = Button(this).apply { text = "Folder"; setOnClickListener { showFolderOptions() } }
         more = Button(this).apply {
             text = "Load $PAGE_SIZE more"; visibility = View.GONE
@@ -166,11 +173,14 @@ class CameraGalleryActivity : Activity() {
             })
             addView(status, LinearLayout.LayoutParams(0, -2, 1f)); addView(busy)
         }
-        val actions = LinearLayout(this).apply {
+        fun actionRow(vararg buttons: Button) = LinearLayout(this).apply {
             gravity = Gravity.CENTER
-            addView(selectButton, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(downloadButton, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(folderButton, LinearLayout.LayoutParams(0, -2, 1f))
+            buttons.forEach { addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
+        }
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(actionRow(selectButton, deleteButton), LinearLayout.LayoutParams(-1, -2))
+            addView(actionRow(downloadButton, folderButton), LinearLayout.LayoutParams(-1, -2))
         }
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK)
@@ -222,7 +232,11 @@ class CameraGalleryActivity : Activity() {
     private fun loadCard() = apiExecutor.execute {
         try {
             enterContentsTransfer()
-            runOnUiThread { loadNextPage() }
+            deleteSupported = supportsDeleteContent()
+            runOnUiThread {
+                deleteButton.visibility = if (deleteSupported) View.VISIBLE else View.GONE
+                loadNextPage()
+            }
         } catch (e: Exception) {
             runOnUiThread {
                 busy.visibility = View.GONE; status.text = "Camera card unavailable"
@@ -243,6 +257,13 @@ class CameraGalleryActivity : Activity() {
         }
         throw error ?: CameraException("Could not enable Contents Transfer")
     }
+
+    /** deleteContent pertenece a avContent y no aparece en getAvailableApiList. */
+    private fun supportsDeleteContent(): Boolean = runCatching {
+        val methods = SonyCamera.call(SonyCamera.avContentEndpoint, "getMethodTypes",
+            JSONArray().put(""))
+        (0 until methods.length()).any { methods.optJSONArray(it)?.optString(0) == "deleteContent" }
+    }.getOrDefault(false)
 
     private fun loadNextPage() {
         if (loadingPage) return
@@ -295,7 +316,9 @@ class CameraGalleryActivity : Activity() {
             val preview = content.optString("largeUrl").ifBlank {
                 originals.firstOrNull { it.kind == "jpeg" }?.url.orEmpty()
             }
-            add(CameraImage(item.optString("createdTime"), content.optString("thumbnailUrl"), preview, originals))
+            val uri = item.optString("uri")
+            if (uri.isNotBlank()) add(CameraImage(uri, item.optString("createdTime"),
+                content.optString("thumbnailUrl"), preview, originals))
         }
     }
 
@@ -345,7 +368,71 @@ class CameraGalleryActivity : Activity() {
     private fun updateSelectionUi() {
         downloadButton.isEnabled = selected.isNotEmpty()
         downloadButton.text = if (selected.isEmpty()) "Download" else "Download (${selected.size})"
+        deleteButton.isEnabled = selected.isNotEmpty()
+        deleteButton.text = if (selected.isEmpty()) "Delete" else "Delete (${selected.size})"
         if (selectMode) status.text = "${selected.size} selected"
+    }
+
+    private fun confirmDeleteSelected() {
+        if (selected.isEmpty()) return
+        val count = selected.size
+        AlertDialog.Builder(this)
+            .setTitle("Delete from camera?")
+            .setMessage("Delete $count ${if (count == 1) "photo" else "photos"} from the camera card? This cannot be undone.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ -> deleteSelected() }
+            .show()
+    }
+
+    private fun deleteSelected() {
+        deleteImages(selected.toList())
+    }
+
+    private fun deleteImages(items: List<CameraImage>, viewer: Dialog? = null) {
+        val targets = items.map { it.uri }
+        if (targets.isEmpty()) return
+        viewer?.dismiss()
+        selectButton.isEnabled = false; downloadButton.isEnabled = false
+        deleteButton.isEnabled = false; folderButton.isEnabled = false
+        more.isEnabled = false; busy.visibility = View.VISIBLE
+        status.text = "Deleting ${targets.size} from camera..."
+        apiExecutor.execute {
+            var failure: Exception? = null
+            try {
+                targets.chunked(100).forEach { chunk ->
+                    val uris = JSONArray().also { array -> chunk.forEach(array::put) }
+                    SonyCamera.call(SonyCamera.avContentEndpoint, "deleteContent",
+                        JSONArray().put(JSONObject().put("uri", uris)), "1.1")
+                }
+            } catch (e: Exception) {
+                failure = e
+            }
+            waitForCardReady()
+            runOnUiThread {
+                resetGallery()
+                selectButton.isEnabled = true; folderButton.isEnabled = true
+                failure?.let { toast("Delete failed: ${it.message}") }
+                loadNextPage()
+            }
+        }
+    }
+
+    /** La respuesta de deleteContent llega antes de que el estado Deleting termine. */
+    private fun waitForCardReady() {
+        repeat(20) {
+            val request = JSONObject().put("uri", "storage:memoryCard1")
+                .put("stIdx", 0).put("cnt", 1).put("view", "flat").put("sort", "descending")
+            if (runCatching { SonyCamera.call(SonyCamera.avContentEndpoint, "getContentList",
+                    JSONArray().put(request), "1.3") }.isSuccess) return
+            Thread.sleep(250)
+        }
+    }
+
+    private fun resetGallery() {
+        images.clear(); selected.clear(); selectionMarks.clear(); thumbnailCache.clear()
+        grid.removeAllViews(); nextIndex = 0; loadingPage = false; selectMode = false
+        selectButton.text = "Select"; more.visibility = View.GONE
+        updateSelectionUi()
     }
 
     private fun showImage(item: CameraImage) {
@@ -384,6 +471,17 @@ class CameraGalleryActivity : Activity() {
                 text = "Save RAW"
                 setOnClickListener { enqueueDownloads(listOf(DownloadJob(current, original))) }
             }) }
+            if (deleteSupported) actions.addView(Button(this).apply {
+                text = "Delete"
+                setOnClickListener {
+                    AlertDialog.Builder(this@CameraGalleryActivity)
+                        .setTitle("Delete from camera?")
+                        .setMessage("Permanently delete this photo from the camera card? This cannot be undone.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete") { _, _ -> deleteImages(listOf(current), dialog) }
+                        .show()
+                }
+            })
             if (current.preview.isBlank()) { spinner.visibility = View.GONE; return }
             spinner.visibility = View.VISIBLE
             previewExecutor.execute {

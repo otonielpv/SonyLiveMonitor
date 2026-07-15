@@ -24,7 +24,8 @@ Componentes:
 - Focus peaking calculado en el movil, con color y sensibilidad configurables
   (tambien funciona con objetivos manuales sin comunicacion electronica).
 - Con Smart Remote Control parcheado en la a6000, galeria completa de la
-  tarjeta mediante `avContent` y descarga separada de JPEG y RAW/ARW.
+  tarjeta mediante `avContent`, descarga separada de JPEG y RAW/ARW y borrado
+  multiple con confirmacion en las camaras compatibles.
 - Reconexion automatica y re-vinculacion a la WiFi activa si cambia de red.
 
 La vista `Camera card` incluye las fotos tomadas tanto desde la app como con el
