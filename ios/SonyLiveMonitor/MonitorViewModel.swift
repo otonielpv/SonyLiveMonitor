@@ -55,11 +55,15 @@ enum PeakingSensitivity: Int, CaseIterable {
         }
     }
 
+    // Umbrales sobre el gradiente Sobel a resolucion completa. Al calcularse por
+    // pixel (no sobre pares de 2px como antes) las magnitudes son menores, y con
+    // supresion de no-maximos solo sobrevive la cresta del borde, asi que se
+    // pueden usar umbrales mas bajos sin ensuciar.
     var threshold: Int {
         switch self {
-        case .low: return 320
-        case .medium: return 220
-        case .high: return 140
+        case .low: return 190
+        case .medium: return 130
+        case .high: return 80
         }
     }
 }
@@ -790,13 +794,15 @@ final class MonitorViewModel: ObservableObject {
 // -- focus peaking calculado integramente en el movil -----------------------------
 
 enum FocusPeaking {
-    /// Sobel sobre el frame a media resolucion. A esta escala conserva detalle
-    /// suficiente para enfocar y reduce mucho el coste frente al JPEG completo.
+    /// Sobel a resolucion completa con supresion de no-maximos: solo se marca la
+    /// cresta del borde (linea de ~1px) y no su relleno. Imita el peaking fino de
+    /// la Sony y evita colorear bordes anchos y desenfocados. Trabajar a full-res
+    /// cuesta mas CPU, pero el peaking corre limitado (~14 fps) con margen de sobra.
     static func compute(_ image: CGImage, color: PeakingColor,
                         sensitivity: PeakingSensitivity) -> UIImage? {
         guard color != .off else { return nil }
-        let width = image.width / 2
-        let height = image.height / 2
+        let width = image.width
+        let height = image.height
         guard width >= 3, height >= 3 else { return nil }
 
         var luma = [UInt8](repeating: 0, count: width * height)
@@ -812,22 +818,42 @@ enum FocusPeaking {
         }
         guard drewImage else { return nil }
 
+        // Paso 1: magnitud del gradiente Sobel en cada pixel interior.
+        var grad = [Int](repeating: 0, count: width * height)
+        luma.withUnsafeBufferPointer { l in
+            grad.withUnsafeMutableBufferPointer { g in
+                for y in 1..<(height - 1) {
+                    for x in 1..<(width - 1) {
+                        let i = y * width + x
+                        let gx = -Int(l[i - width - 1]) + Int(l[i - width + 1])
+                            - 2 * Int(l[i - 1]) + 2 * Int(l[i + 1])
+                            - Int(l[i + width - 1]) + Int(l[i + width + 1])
+                        let gy = -Int(l[i - width - 1]) - 2 * Int(l[i - width])
+                            - Int(l[i - width + 1]) + Int(l[i + width - 1])
+                            + 2 * Int(l[i + width]) + Int(l[i + width + 1])
+                        g[i] = abs(gx) + abs(gy)
+                    }
+                }
+            }
+        }
+
         var rgba = [UInt8](repeating: 0, count: width * height * 4)
         let (red, green, blue, alpha) = color.rgba
         // El contexto de salida usa alpha premultiplicado.
         let outR = UInt8(Int(red) * Int(alpha) / 255)
         let outG = UInt8(Int(green) * Int(alpha) / 255)
         let outB = UInt8(Int(blue) * Int(alpha) / 255)
+        let threshold = sensitivity.threshold
+        // Paso 2: marcamos solo donde el gradiente supera el umbral y es un maximo
+        // local frente a los cuatro vecinos. Asi la banda ancha de un borde
+        // borroso se reduce a su cresta y desaparece si la transicion es suave.
         for y in 1..<(height - 1) {
             for x in 1..<(width - 1) {
                 let i = y * width + x
-                let gx = -Int(luma[i - width - 1]) + Int(luma[i - width + 1])
-                    - 2 * Int(luma[i - 1]) + 2 * Int(luma[i + 1])
-                    - Int(luma[i + width - 1]) + Int(luma[i + width + 1])
-                let gy = -Int(luma[i - width - 1]) - 2 * Int(luma[i - width])
-                    - Int(luma[i - width + 1]) + Int(luma[i + width - 1])
-                    + 2 * Int(luma[i + width]) + Int(luma[i + width + 1])
-                guard abs(gx) + abs(gy) >= sensitivity.threshold else { continue }
+                let g = grad[i]
+                guard g >= threshold,
+                      g >= grad[i - 1], g >= grad[i + 1],
+                      g >= grad[i - width], g >= grad[i + width] else { continue }
                 let p = i * 4
                 rgba[p] = outR; rgba[p + 1] = outG; rgba[p + 2] = outB; rgba[p + 3] = alpha
             }

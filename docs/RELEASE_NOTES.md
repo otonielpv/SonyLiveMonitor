@@ -1,5 +1,34 @@
 # Release notes
 
+## v0.6
+
+**Improved**
+
+- **Sharper focus peaking on Android and iOS** — the edge highlight is now a thin
+  ~1px line, closer to the camera's own peaking, instead of a thick band. Edge
+  detection runs at full resolution and keeps only the crest of each edge
+  (non-maximum suppression), so soft, out-of-focus transitions between differently
+  coloured areas are no longer marked. The result is more precise and less noisy.
+
+**Notes**
+
+- Sensitivity thresholds were recalibrated for the full-resolution processing; the
+  low/medium/high levels behave as before but are more selective about what counts
+  as an in-focus edge.
+- This update only changes the Android and iOS phone apps. The patched camera APK
+  used for card browsing and RAW support is unchanged.
+
+**Downloads**
+
+- `SonyLiveMonitor-v0.6.apk` — Android phone app.
+- `SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk` — unchanged patched
+  camera app (install on the **camera** with PMCA-RE, not on the phone).
+- `SonyLiveMonitor-v0.6-unsigned.ipa` — iOS, sideload with AltStore.
+
+See the [install guide](https://github.com/otonielpv/SonyLiveMonitor/blob/main/docs/a6000-live-monitor-guide.md).
+
+---
+
 ## v0.5
 
 **New**

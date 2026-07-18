@@ -59,8 +59,12 @@ class MainActivity : Activity() {
         WHITE("white", Color.argb(235, 255, 255, 255)),
     }
 
+    // Umbrales sobre el gradiente Sobel a resolucion completa. Al calcularse por
+    // pixel (no sobre pares de 2px como antes) las magnitudes son menores, y con
+    // supresion de no-maximos solo sobrevive la cresta del borde, asi que se
+    // pueden usar umbrales mas bajos sin ensuciar.
     private enum class PeakingSensitivity(val label: String, val shortLabel: String, val threshold: Int) {
-        LOW("low", "L", 320), MEDIUM("medium", "M", 220), HIGH("high", "H", 140),
+        LOW("low", "L", 190), MEDIUM("medium", "M", 130), HIGH("high", "H", 80),
     }
 
     /** Ajuste editable en vivo desde la barra inferior. */
@@ -179,11 +183,15 @@ class MainActivity : Activity() {
     }
     private val peakingPaint = Paint().apply { isFilterBitmap = false }
 
-    /** Sobel sobre una imagen a media resolucion. Mantiene sus buffers para no
-     *  generar basura en cada frame y alterna dos mascaras para el compositor. */
+    /** Sobel a resolucion completa con supresion de no-maximos, de modo que solo
+     *  se marca la cresta del borde (linea de ~1px) y no su relleno. Esto imita
+     *  el peaking fino de la Sony y evita colorear bordes anchos y desenfocados.
+     *  Mantiene sus buffers para no generar basura en cada frame y alterna dos
+     *  mascaras para el compositor. */
     private class FocusPeakingProcessor {
         private var sourcePixels = IntArray(0)
         private var luma = IntArray(0)
+        private var grad = IntArray(0)   // |gx|+|gy| por pixel, reutilizado para NMS
         private var maskPixels = IntArray(0)
         private var maskWidth = 0
         private var maskHeight = 0
@@ -192,36 +200,31 @@ class MainActivity : Activity() {
 
         fun compute(source: Bitmap, color: PeakingColor, sensitivity: PeakingSensitivity): Bitmap? {
             if (color == PeakingColor.OFF || source.width < 6 || source.height < 6) return null
-            val sw = source.width
-            val sh = source.height
-            val w = sw / 2
-            val h = sh / 2
-            if (sourcePixels.size != sw * sh) sourcePixels = IntArray(sw * sh)
+            val w = source.width
+            val h = source.height
+            if (sourcePixels.size != w * h) sourcePixels = IntArray(w * h)
             if (w != maskWidth || h != maskHeight) {
                 maskWidth = w; maskHeight = h
                 luma = IntArray(w * h)
+                grad = IntArray(w * h)
                 maskPixels = IntArray(w * h)
                 masks = arrayOfNulls(2)
                 maskIndex = 0
             }
-            source.getPixels(sourcePixels, 0, sw, 0, 0, sw, sh)
-            var y = 0
-            while (y < h) {
-                var x = 0
-                val srcRow = y * 2 * sw
-                val dstRow = y * w
-                while (x < w) {
-                    val c = sourcePixels[srcRow + x * 2]
-                    luma[dstRow + x] =
-                        ((c shr 16 and 0xFF) * 54 + (c shr 8 and 0xFF) * 183 +
-                            (c and 0xFF) * 19) shr 8
-                    x++
-                }
-                y++
+            source.getPixels(sourcePixels, 0, w, 0, 0, w, h)
+            var p = 0
+            val n = w * h
+            while (p < n) {
+                val c = sourcePixels[p]
+                luma[p] = ((c shr 16 and 0xFF) * 54 + (c shr 8 and 0xFF) * 183 +
+                    (c and 0xFF) * 19) shr 8
+                p++
             }
 
-            maskPixels.fill(Color.TRANSPARENT)
-            y = 1
+            // Paso 1: magnitud del gradiente Sobel en cada pixel interior.
+            grad.fill(0)
+            val threshold = sensitivity.threshold
+            var y = 1
             while (y < h - 1) {
                 var x = 1
                 while (x < w - 1) {
@@ -231,8 +234,29 @@ class MainActivity : Activity() {
                         luma[i + w - 1] + luma[i + w + 1]
                     val gy = -luma[i - w - 1] - 2 * luma[i - w] - luma[i - w + 1] +
                         luma[i + w - 1] + 2 * luma[i + w] + luma[i + w + 1]
-                    if (kotlin.math.abs(gx) + kotlin.math.abs(gy) >= sensitivity.threshold) {
-                        maskPixels[i] = color.argb
+                    grad[i] = kotlin.math.abs(gx) + kotlin.math.abs(gy)
+                    x++
+                }
+                y++
+            }
+
+            // Paso 2: solo marcamos donde el gradiente supera el umbral y es un
+            // maximo local frente a los dos vecinos perpendiculares al borde.
+            // Asi la banda ancha de un borde borroso se reduce a su cresta y
+            // desaparece cuando la transicion es suave (desenfocada).
+            maskPixels.fill(Color.TRANSPARENT)
+            val argb = color.argb
+            y = 1
+            while (y < h - 1) {
+                var x = 1
+                while (x < w - 1) {
+                    val i = y * w + x
+                    val g = grad[i]
+                    if (g >= threshold &&
+                        g >= grad[i - 1] && g >= grad[i + 1] &&
+                        g >= grad[i - w] && g >= grad[i + w]
+                    ) {
+                        maskPixels[i] = argb
                     }
                     x++
                 }
