@@ -297,7 +297,7 @@ struct ControlPanel: View {
     private var content: some View {
         let largestGroupItems = MonitorViewModel.settings.count + 5  // EV, WB, mode y dos zooms
         let reservedRows = (largestGroupItems + columns - 1) / columns
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             if let strip = model.strip {
                 ValueStripView(strip: strip)
             }
