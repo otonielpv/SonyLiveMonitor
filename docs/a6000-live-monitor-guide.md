@@ -22,7 +22,8 @@ the camera.
 - **Live view stays active while recording video** — press MOVIE on the camera (or
   start recording from the app) and keep monitoring on the phone.
 - **On‑screen tools**: exposure meter (histogram + EV + clipping), framing grids,
-  touch focus, ISO / shutter / aperture / EV / WB / drive controls, powered zoom.
+  touch focus, mirror preview, ISO / shutter / aperture / EV / WB / drive
+  controls, powered zoom. Controls are grouped into Camera, View and App tabs.
 - **Camera card gallery** (the new part): browse everything on the SD card —
   including shots taken with the physical shutter — with a full‑screen viewer.
 - **Download JPEG or RAW/ARW** to the phone. Multi‑select, progress dialog, and a
@@ -164,6 +165,13 @@ is unreachable.
 
 - **Monitor + record:** live view stays up while the camera records. Start/stop with
   the on‑screen shutter (in movie mode) or the physical MOVIE button.
+- **Mirror preview / selfie mode:** open the **View** tab and enable **Mirror** so
+  left/right movement behaves like a mirror while filming yourself. This affects
+  only the phone preview; the camera recording is never flipped. Touch focus is
+  automatically corrected while the mirrored view is active.
+- **Control tabs:** camera exposure and shooting controls are under **Camera**,
+  monitoring aids are under **View**, and connection, gallery and diagnostics
+  live under **App**. The last selected tab is remembered.
 - **Camera card gallery:** tap **Camera card**. Thumbnails load in pages; tap one for
   the full‑screen viewer, pinch to zoom, and **swipe left/right** between shots.
 - **Download JPEG / RAW:** select one or more photos, tap **Download**, choose JPEG,

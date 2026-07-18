@@ -15,9 +15,9 @@ val hasReleaseSigning = listOf(
 ).all { !it.isNullOrBlank() }
 
 val appVersionCode = providers.gradleProperty("versionCode")
-    .orNull?.toIntOrNull() ?: 6
+    .orNull?.toIntOrNull() ?: 7
 val appVersionName = providers.gradleProperty("versionName")
-    .orNull ?: "0.6"
+    .orNull ?: "0.7"
 
 android {
     namespace = "com.otoniel.sonylivemonitor"

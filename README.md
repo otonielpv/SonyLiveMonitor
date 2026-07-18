@@ -23,6 +23,11 @@ Componentes:
 - Enfoque tactil tocando la imagen (setTouchAFPosition).
 - Focus peaking calculado en el movil, con color y sensibilidad configurables
   (tambien funciona con objetivos manuales sin comunicacion electronica).
+- Vista espejo horizontal para grabarse mirando el monitor; solo transforma la
+  previsualizacion y mantiene correcto el enfoque tactil.
+- Panel escalable por pestanas (`Camera`, `View` y `App`) que evita acumular
+  todos los controles en una unica rejilla, mantiene estable el tamano del
+  liveview y usa tarjetas modernas con estados activos claramente visibles.
 - Con Smart Remote Control parcheado en la a6000, galeria completa de la
   tarjeta mediante `avContent`, descarga separada de JPEG y RAW/ARW y borrado
   multiple con confirmacion en las camaras compatibles.
@@ -65,7 +70,8 @@ mismo lector de liveview anti-lag (socket crudo con `TCP_NODELAY`, solo se
 conserva el frame mas reciente), mismos controles (ISO, velocidad, apertura,
 enfoque, flash, temporizador, EV, WB, modo foto/video), zoom motorizado,
 enfoque tactil, cuadriculas, HUD, medidor de exposicion, disparador
-flotante arrastrable, focus peaking y la misma galeria `Camera card` (avContent): miniaturas
+flotante arrastrable, vista espejo, panel por pestanas, focus peaking y la misma
+galeria `Camera card` (avContent): miniaturas
 paginadas, visor con zoom y paso de fotos deslizando, seleccion multiple y
 descarga de JPEG/RAW con dialogo de progreso que bloquea la pantalla.
 

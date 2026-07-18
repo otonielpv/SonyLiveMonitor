@@ -3,6 +3,7 @@ package com.otoniel.sonylivemonitor
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.content.Intent
 import android.content.res.Configuration
@@ -10,10 +11,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -109,10 +112,14 @@ class MainActivity : Activity() {
     @Volatile private var peakingColor = PeakingColor.OFF
     @Volatile private var peakingSensitivity = PeakingSensitivity.MEDIUM
     @Volatile private var rotation = 0  // 0/90/180/270 grados de rotacion del render
+    @Volatile private var mirror = false  // espejo horizontal del render (modo selfie)
     @Volatile private var capturing = false
     @Volatile private var lastFitRect = RectF()
     @Volatile private var focusMarker: Pair<Float, Float>? = null
     @Volatile private var focusMarkerUntil = 0L
+    private val frameMatrix = Matrix()
+    private val frameSrcCorners = FloatArray(8)
+    private val frameDstCorners = FloatArray(8)
 
     // Zonas ocupadas por las barras de botones (medidas tras el layout),
     // para que HUD y medidor no se solapen con ellas en ninguna orientacion
@@ -127,7 +134,13 @@ class MainActivity : Activity() {
     private lateinit var panelContainer: ScrollView
     private lateinit var panelFrame: FrameLayout
     private lateinit var controlGrid: GridLayout
-    private val chipButtons = mutableListOf<Button>()
+    // Chips agrupados por pestana del panel: Camera / View / App
+    private val cameraChips = mutableListOf<Button>()
+    private val viewChips = mutableListOf<Button>()
+    private val appChips = mutableListOf<Button>()
+    private val tabGroups get() = listOf(cameraChips, viewChips, appChips)
+    private val tabButtons = mutableListOf<Button>()
+    private var panelTab = 0
 
     // Feedback de zoom (la API da porcentaje; los mm son estimados 16-50)
     @Volatile private var zoomText: String? = null
@@ -286,7 +299,9 @@ class MainActivity : Activity() {
             getPreferences(MODE_PRIVATE).getInt("peaking_sensitivity", 1)
         ) { PeakingSensitivity.MEDIUM }
         rotation = getPreferences(MODE_PRIVATE).getInt("rot", 0)
+        mirror = getPreferences(MODE_PRIVATE).getBoolean("mirror", false)
         hudOn = getPreferences(MODE_PRIVATE).getBoolean("hud", true)
+        panelTab = getPreferences(MODE_PRIVATE).getInt("panel_tab", 0).coerceIn(0, 2)
 
         val root = FrameLayout(this)
         surface = SurfaceView(this)
@@ -371,15 +386,28 @@ class MainActivity : Activity() {
      */
     private fun buildShutterButton(): View {
         val frame = FrameLayout(this)
+        val shutterSize = (68 * resources.displayMetrics.density).toInt()
         val lp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            shutterSize, shutterSize,
             Gravity.TOP or Gravity.START,
         )
         val b = Button(this).apply {
             text = "●"
-            textSize = 30f
-            alpha = 0.85f
-            setTextColor(Color.rgb(255, 80, 80))
+            textSize = 27f
+            minWidth = 0; minimumWidth = 0
+            minHeight = 0; minimumHeight = 0
+            setPadding(0, 0, 0, 2)
+            elevation = 6 * resources.displayMetrics.density
+            setTextColor(Color.rgb(255, 76, 86))
+            background = RippleDrawable(
+                ColorStateList.valueOf(Color.argb(90, 255, 255, 255)),
+                GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.argb(225, 24, 28, 34))
+                    setStroke((2 * resources.displayMetrics.density).toInt(), Color.argb(150, 255, 255, 255))
+                },
+                null,
+            )
             setOnClickListener { takePicture() }
         }
         frame.addView(b, lp)
@@ -448,9 +476,9 @@ class MainActivity : Activity() {
     // -- UI: barra inferior (ajustes en vivo + disparo) ---------------------------
 
     /**
-     * Panel de control fijo con TODOS los ajustes visibles a la vez (como la
-     * app oficial): rejilla a lo ancho bajo el monitor en vertical, columna
-     * lateral en horizontal. El area de video se encoge para no solaparse.
+     * Panel de control por categorias: rejilla a lo ancho bajo el monitor en
+     * vertical y columna lateral en horizontal. El area de video se encoge
+     * para no solaparse y cada grupo puede crecer sin saturar la pantalla.
      */
     private fun buildBottomBar(): View {
         valueRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -460,25 +488,30 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.argb(150, 0, 0, 0))
         }
 
-        fun chip(text: String, onClick: () -> Unit) = Button(this).apply {
+        fun chip(group: MutableList<Button>, text: String, onClick: () -> Unit) = Button(this).apply {
             this.text = text
-            textSize = 13f
-            alpha = 0.9f
+            textSize = 12.5f
             isAllCaps = false
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(4, 4, 4, 4)
+            minWidth = 0; minimumWidth = 0
+            minHeight = 0; minimumHeight = 0
+            setPadding(12, 4, 12, 4)
+            tag = "chip"
+            elevation = 0f
+            stateListAnimator = null
+            highlightValue(this, false)
             setOnClickListener { onClick() }
-            chipButtons.add(this)
+            group.add(this)
         }
 
-        settings.forEach { s -> chips[s] = chip(s.title) { toggleValueStrip(s) } }
-        chipEv = chip("EV") { toggleEvStrip() }
-        chipWb = chip("WB") { toggleWbStrip() }
-        chipShootMode = chip("Mode: Photo") { toggleModeStrip() }
+        settings.forEach { s -> chips[s] = chip(cameraChips, s.title) { toggleValueStrip(s) } }
+        chipEv = chip(cameraChips, "EV") { toggleEvStrip() }
+        chipWb = chip(cameraChips, "WB") { toggleWbStrip() }
+        chipShootMode = chip(cameraChips, "Mode: Photo") { toggleModeStrip() }
 
         // Zoom motorizado: mantener pulsado
-        fun zoomChip(label: String, direction: String) = chip(label) {}.apply {
+        fun zoomChip(label: String, direction: String) = chip(cameraChips, label) {}.apply {
             setOnClickListener(null)
             setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
@@ -497,7 +530,7 @@ class MainActivity : Activity() {
         // Botones de la app, en el mismo panel para que nada flote sobre
         // el monitor. Conectar: un toque conecta con lo guardado; mantener
         // pulsado edita las credenciales.
-        btnConnect = chip("Connect") {
+        btnConnect = chip(appChips, "Connect") {
             when {
                 directNetwork != null -> disconnectCamera()
                 getPreferences(MODE_PRIVATE).getString("pass", "").isNullOrEmpty() -> showConnectDialog()
@@ -512,23 +545,37 @@ class MainActivity : Activity() {
             true
         }
         var btnRot: Button? = null
-        btnRot = chip("Rot: ${rotation}°") {
+        btnRot = chip(viewChips, "Rot: ${rotation}°") {
             rotation = (rotation + 90) % 360
             getPreferences(MODE_PRIVATE).edit().putInt("rot", rotation).apply()
             btnRot?.text = "Rot: ${rotation}°"
         }
-        btnGrid = chip("Grid: ${gridLabel()}") { cycleGrid() }
-        btnMeter = chip("Meter: ${if (meterOn) "on" else "off"}") {
+        // Espejo horizontal (modo selfie): solo afecta a la vista, no a lo que graba la camara
+        var btnMirror: Button? = null
+        btnMirror = chip(viewChips, "Mirror: ${if (mirror) "on" else "off"}") {
+            mirror = !mirror
+            getPreferences(MODE_PRIVATE).edit().putBoolean("mirror", mirror).apply()
+            btnMirror?.text = "Mirror: ${if (mirror) "on" else "off"}"
+            btnMirror?.let { highlightValue(it, mirror) }
+        }
+        highlightValue(btnMirror, mirror)
+        btnGrid = chip(viewChips, "Grid: ${gridLabel()}") { cycleGrid() }
+        highlightValue(btnGrid, grid != Grid.OFF)
+        btnMeter = chip(viewChips, "Meter: ${if (meterOn) "on" else "off"}") {
             meterOn = !meterOn
             getPreferences(MODE_PRIVATE).edit().putBoolean("meter", meterOn).apply()
             btnMeter.text = "Meter: ${if (meterOn) "on" else "off"}"
+            highlightValue(btnMeter, meterOn)
         }
-        btnPeaking = chip("Peak: ${peakingColor.label}") {
+        highlightValue(btnMeter, meterOn)
+        btnPeaking = chip(viewChips, "Peak: ${peakingColor.label}") {
             peakingColor = PeakingColor.entries[(peakingColor.ordinal + 1) % PeakingColor.entries.size]
             getPreferences(MODE_PRIVATE).edit().putInt("peaking_color", peakingColor.ordinal).apply()
             btnPeaking.text = "Peak: ${peakingColor.label}"
+            highlightValue(btnPeaking, peakingColor != PeakingColor.OFF)
         }
-        btnPeakingSensitivity = chip("Peak sens: ${peakingSensitivity.shortLabel}") {
+        highlightValue(btnPeaking, peakingColor != PeakingColor.OFF)
+        btnPeakingSensitivity = chip(viewChips, "Peak sens: ${peakingSensitivity.shortLabel}") {
             peakingSensitivity = PeakingSensitivity.entries[
                 (peakingSensitivity.ordinal + 1) % PeakingSensitivity.entries.size
             ]
@@ -536,25 +583,61 @@ class MainActivity : Activity() {
                 .putInt("peaking_sensitivity", peakingSensitivity.ordinal).apply()
             btnPeakingSensitivity.text = "Peak sens: ${peakingSensitivity.shortLabel}"
         }
-        btnHud = chip("HUD: ${if (hudOn) "on" else "off"}") {
+        btnHud = chip(viewChips, "HUD: ${if (hudOn) "on" else "off"}") {
             hudOn = !hudOn
             getPreferences(MODE_PRIVATE).edit().putBoolean("hud", hudOn).apply()
             btnHud.text = "HUD: ${if (hudOn) "on" else "off"}"
+            highlightValue(btnHud, hudOn)
         }
-        btnGallery = chip("Camera card") {
+        highlightValue(btnHud, hudOn)
+        btnGallery = chip(appChips, "Camera card") {
             openingGallery = true
             startActivity(Intent(this, CameraGalleryActivity::class.java))
         }
-        chip("Diag") { showDiagnostics() }
+        chip(appChips, "Diag") { showDiagnostics() }
 
         controlGrid = GridLayout(this)
 
+        // Pestanas del panel: cambian que grupo de chips se muestra en la rejilla
+        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf("Camera", "View", "App").forEachIndexed { i, name ->
+            val b = Button(this).apply {
+                text = name
+                textSize = 13f
+                isAllCaps = false
+                minWidth = 0; minimumWidth = 0
+                minHeight = 0; minimumHeight = 0
+                setPadding(4, 4, 4, 4)
+                tag = "tab"
+                elevation = 0f
+                stateListAnimator = null
+                setOnClickListener {
+                    if (panelTab != i) {
+                        panelTab = i
+                        getPreferences(MODE_PRIVATE).edit().putInt("panel_tab", i).apply()
+                        closeValueStrip()
+                        applyPanelLayout()
+                    }
+                }
+            }
+            tabButtons.add(b)
+            tabRow.addView(b, LinearLayout.LayoutParams(
+                0, (40 * resources.displayMetrics.density).toInt(), 1f,
+            ).apply { setMargins(2, 2, 2, 2) })
+        }
+
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(160, 0, 0, 0))
+            background = GradientDrawable().apply {
+                cornerRadius = 14 * resources.displayMetrics.density
+                setColor(Color.argb(242, 16, 19, 24))
+            }
             addView(valueStrip, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { gravity = Gravity.CENTER_HORIZONTAL })
+            addView(tabRow, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ))
             addView(controlGrid, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ))
@@ -576,9 +659,10 @@ class MainActivity : Activity() {
     /** Recoloca el panel segun la orientacion actual. */
     private fun applyPanelLayout() {
         val portrait = resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
+        tabButtons.forEachIndexed { i, b -> highlightValue(b, i == panelTab) }
         controlGrid.removeAllViews()
         controlGrid.columnCount = if (portrait) 4 else 2
-        chipButtons.forEach { b ->
+        tabGroups[panelTab].forEach { b ->
             (b.parent as? android.view.ViewGroup)?.removeView(b)
             controlGrid.addView(b, GridLayout.LayoutParams(
                 GridLayout.spec(GridLayout.UNDEFINED),
@@ -586,11 +670,17 @@ class MainActivity : Activity() {
             ).apply {
                 width = 0
                 // Altura fija: un texto largo no debe descuadrar su fila
-                height = (44 * resources.displayMetrics.density).toInt()
+                height = (36 * resources.displayMetrics.density).toInt()
                 setMargins(2, 2, 2, 2)
             })
         }
         val density = resources.displayMetrics.density
+        // Reservar siempre las filas que necesita la categoria mas grande evita
+        // que el liveview cambie de tamano al pasar entre Camera, View y App.
+        val maxRows = tabGroups.maxOf { (it.size + controlGrid.columnCount - 1) / controlGrid.columnCount }
+        controlGrid.layoutParams = (controlGrid.layoutParams as LinearLayout.LayoutParams).apply {
+            height = (maxRows * 38 * density).toInt()
+        }
         panelContainer.layoutParams = if (portrait) {
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -677,12 +767,9 @@ class MainActivity : Activity() {
                 minWidth = 0
                 minimumWidth = 0
                 setPadding(30, 16, 30, 16)
-                // Estilo pildora: distingue el submenu de los botones padre
-                background = GradientDrawable().apply {
-                    cornerRadius = 32f
-                    setColor(Color.argb(235, 38, 42, 50))
-                    setStroke(2, Color.argb(130, 0, 255, 128))
-                }
+                tag = "value"
+                elevation = 0f
+                stateListAnimator = null
                 highlightValue(this, value == current)
                 setOnClickListener { onPick(value, this) }
             }
@@ -703,9 +790,33 @@ class MainActivity : Activity() {
     }
 
     private fun highlightValue(button: Button, selected: Boolean) {
-        button.setTextColor(if (selected) Color.rgb(0, 255, 128) else Color.WHITE)
-        button.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-        button.alpha = if (selected) 1f else 0.85f
+        val density = resources.displayMetrics.density
+        val kind = button.tag as? String
+        val fill = when {
+            kind == "tab" && selected -> Color.rgb(25, 66, 51)
+            kind == "tab" -> Color.TRANSPARENT
+            selected -> Color.rgb(20, 59, 46)
+            else -> Color.rgb(31, 35, 42)
+        }
+        val stroke = when {
+            selected -> Color.argb(220, 0, 255, 128)
+            kind == "tab" -> Color.TRANSPARENT
+            else -> Color.rgb(56, 62, 72)
+        }
+        val radius = if (kind == "value") 20f else 10f
+        val content = GradientDrawable().apply {
+            cornerRadius = radius * density
+            setColor(fill)
+            setStroke(maxOf(1, density.toInt()), stroke)
+        }
+        button.background = RippleDrawable(
+            ColorStateList.valueOf(Color.argb(75, 0, 255, 128)),
+            content,
+            null,
+        )
+        button.setTextColor(if (selected) Color.rgb(75, 255, 163) else Color.rgb(224, 228, 234))
+        button.typeface = Typeface.create("sans-serif-medium", if (selected) Typeface.BOLD else Typeface.NORMAL)
+        button.alpha = 1f
     }
 
     private var openChipButton: Button? = null
@@ -1323,9 +1434,10 @@ class MainActivity : Activity() {
         }
         val r = lastFitRect
         if (r.isEmpty || !r.contains(ev.x, ev.y)) return true
-        // Deshacer la rotacion del render para que el punto caiga donde se toco
-        val u = (ev.x - r.left) / r.width()
+        // Deshacer espejo y rotacion del render para que el punto caiga donde se toco
+        var u = (ev.x - r.left) / r.width()
         val w = (ev.y - r.top) / r.height()
+        if (mirror) u = 1 - u
         val (fx, fy) = when (rotation) {
             90 -> w to 1 - u
             180 -> 1 - u to 1 - w
@@ -1550,18 +1662,46 @@ class MainActivity : Activity() {
                 val w = bitmap.width * scale
                 val h = bitmap.height * scale
                 val dst = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-                if (rotation != 0) {
-                    canvas.save()
-                    canvas.rotate(rotation.toFloat(), cx, cy)
-                    canvas.drawBitmap(bitmap, null, dst, bitmapPaint)
-                    peakingOverlay?.let { canvas.drawBitmap(it, null, dst, peakingPaint) }
-                    canvas.restore()
-                } else {
-                    canvas.drawBitmap(bitmap, null, dst, bitmapPaint)
-                    peakingOverlay?.let { canvas.drawBitmap(it, null, dst, peakingPaint) }
-                }
                 // Caja ocupada en pantalla (para cuadricula y enfoque tactil)
                 lastFitRect = if (swap) RectF(cx - h / 2, cy - w / 2, cx + h / 2, cy + w / 2) else dst
+                // Mapear explicitamente las cuatro esquinas evita que el orden
+                // interno de scale/rotate cambie el eje del espejo. El reflejo
+                // se aplica al final sobre X de pantalla en los cuatro angulos.
+                frameSrcCorners[0] = 0f;                  frameSrcCorners[1] = 0f
+                frameSrcCorners[2] = bitmap.width.toFloat(); frameSrcCorners[3] = 0f
+                frameSrcCorners[4] = bitmap.width.toFloat(); frameSrcCorners[5] = bitmap.height.toFloat()
+                frameSrcCorners[6] = 0f;                  frameSrcCorners[7] = bitmap.height.toFloat()
+                val l = lastFitRect.left
+                val t = lastFitRect.top
+                val r = lastFitRect.right
+                val b = lastFitRect.bottom
+                when (rotation) {
+                    90 -> frameDstCorners.apply {
+                        this[0] = r; this[1] = t; this[2] = r; this[3] = b
+                        this[4] = l; this[5] = b; this[6] = l; this[7] = t
+                    }
+                    180 -> frameDstCorners.apply {
+                        this[0] = r; this[1] = b; this[2] = l; this[3] = b
+                        this[4] = l; this[5] = t; this[6] = r; this[7] = t
+                    }
+                    270 -> frameDstCorners.apply {
+                        this[0] = l; this[1] = b; this[2] = l; this[3] = t
+                        this[4] = r; this[5] = t; this[6] = r; this[7] = b
+                    }
+                    else -> frameDstCorners.apply {
+                        this[0] = l; this[1] = t; this[2] = r; this[3] = t
+                        this[4] = r; this[5] = b; this[6] = l; this[7] = b
+                    }
+                }
+                if (mirror) {
+                    for (i in frameDstCorners.indices step 2) {
+                        frameDstCorners[i] = 2f * cx - frameDstCorners[i]
+                    }
+                }
+                frameMatrix.reset()
+                frameMatrix.setPolyToPoly(frameSrcCorners, 0, frameDstCorners, 0, 4)
+                canvas.drawBitmap(bitmap, frameMatrix, bitmapPaint)
+                peakingOverlay?.let { canvas.drawBitmap(it, frameMatrix, peakingPaint) }
                 drawGrid(canvas, lastFitRect)
                 drawFocusMarker(canvas)
                 if (exposure != null) drawMeter(canvas, exposure)
@@ -1650,6 +1790,7 @@ class MainActivity : Activity() {
         grid = Grid.entries[(grid.ordinal + 1) % Grid.entries.size]
         getPreferences(MODE_PRIVATE).edit().putInt("grid", grid.ordinal).apply()
         btnGrid.text = "Grid: ${gridLabel()}"
+        highlightValue(btnGrid, grid != Grid.OFF)
     }
 
     private fun drawFocusMarker(canvas: Canvas) {

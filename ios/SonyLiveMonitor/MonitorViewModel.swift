@@ -127,6 +127,8 @@ final class MonitorViewModel: ObservableObject {
     @Published var strip: ValueStrip?
     @Published var chipLabels: [String: String] = [:]
     @Published var rotation: Int
+    @Published var mirror: Bool
+    @Published var panelTab: Int
     @Published var grid: GridMode
     @Published var meterOn: Bool
     @Published var peakingColor: PeakingColor
@@ -165,6 +167,8 @@ final class MonitorViewModel: ObservableObject {
 
     init() {
         rotation = defaults.integer(forKey: "rot")
+        mirror = defaults.bool(forKey: "mirror")
+        panelTab = min(max(defaults.integer(forKey: "panelTab"), 0), 2)
         grid = GridMode(rawValue: defaults.integer(forKey: "grid")) ?? .off
         meterOn = defaults.bool(forKey: "meter")
         peakingColor = PeakingColor(rawValue: defaults.integer(forKey: "peakingColor")) ?? .off
@@ -210,6 +214,18 @@ final class MonitorViewModel: ObservableObject {
     func cycleRotation() {
         rotation = (rotation + 90) % 360
         defaults.set(rotation, forKey: "rot")
+    }
+
+    func toggleMirror() {
+        mirror.toggle()
+        defaults.set(mirror, forKey: "mirror")
+    }
+
+    func selectPanelTab(_ tab: Int) {
+        guard (0...2).contains(tab), panelTab != tab else { return }
+        panelTab = tab
+        strip = nil
+        defaults.set(tab, forKey: "panelTab")
     }
 
     func cycleGrid() {

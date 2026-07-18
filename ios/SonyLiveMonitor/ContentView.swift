@@ -108,6 +108,7 @@ struct VideoArea: View {
                         .interpolation(.low)
                         .frame(width: fit.size.width, height: fit.size.height)
                         .rotationEffect(.degrees(Double(model.rotation)))
+                        .scaleEffect(x: model.mirror ? -1 : 1, y: 1)
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     if let peaking = model.peakingImage {
                         Image(uiImage: peaking)
@@ -115,6 +116,7 @@ struct VideoArea: View {
                             .interpolation(.none)
                             .frame(width: fit.size.width, height: fit.size.height)
                             .rotationEffect(.degrees(Double(model.rotation)))
+                            .scaleEffect(x: model.mirror ? -1 : 1, y: 1)
                             .position(x: geo.size.width / 2, y: geo.size.height / 2)
                             .allowsHitTesting(false)
                     }
@@ -174,9 +176,10 @@ struct VideoArea: View {
         guard let image = model.image else { return }
         let box = videoBox(container: container, image: image.size, rotation: model.rotation).box
         guard !box.isEmpty, box.contains(point) else { return }
-        // Deshacer la rotacion del render para que el punto caiga donde se toco
-        let u = (point.x - box.minX) / box.width
+        // Deshacer primero el espejo de pantalla y despues la rotacion del render.
+        var u = (point.x - box.minX) / box.width
         let w = (point.y - box.minY) / box.height
+        if model.mirror { u = 1 - u }
         let fx: CGFloat
         let fy: CGFloat
         switch model.rotation {
@@ -292,40 +295,92 @@ struct ControlPanel: View {
     }
 
     private var content: some View {
+        let largestGroupItems = MonitorViewModel.settings.count + 5  // EV, WB, mode y dos zooms
+        let reservedRows = (largestGroupItems + columns - 1) / columns
         VStack(spacing: 0) {
             if let strip = model.strip {
                 ValueStripView(strip: strip)
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: columns),
-                      spacing: 4) {
-                ForEach(MonitorViewModel.settings) { setting in
-                    ChipButton(label: model.chipLabels[setting.id] ?? setting.id,
-                               active: model.strip?.owner == setting.id) {
-                        model.toggleStrip(for: setting)
+            HStack(spacing: 4) {
+                ForEach(Array(["Camera", "View", "App"].enumerated()), id: \.offset) { index, title in
+                    PanelTabButton(label: title, active: model.panelTab == index) {
+                        model.selectPanelTab(index)
                     }
                 }
-                ChipButton(label: model.chipLabels["EV"] ?? "EV",
-                           active: model.strip?.owner == "EV") { model.toggleEvStrip() }
-                ChipButton(label: model.chipLabels["WB"] ?? "WB",
-                           active: model.strip?.owner == "WB") { model.toggleWbStrip() }
-                ChipButton(label: model.chipLabels["MODE"] ?? "Mode",
-                           active: model.strip?.owner == "MODE") { model.toggleModeStrip() }
-                ZoomChip(label: "Z− (W)", direction: "out", model: model)
-                ZoomChip(label: "Z+ (T)", direction: "in", model: model)
-                ChipButton(label: "WiFi") { model.showConnectHelp = true }
-                ChipButton(label: "Rot: \(model.rotation)°") { model.cycleRotation() }
-                ChipButton(label: "Grid: \(model.grid.label)") { model.cycleGrid() }
-                ChipButton(label: "Meter: \(model.meterOn ? "on" : "off")") { model.toggleMeter() }
-                ChipButton(label: "Peak: \(model.peakingColor.label)") { model.cyclePeakingColor() }
-                ChipButton(label: "Peak sens: \(model.peakingSensitivity.shortLabel)") {
-                    model.cyclePeakingSensitivity()
-                }
-                ChipButton(label: "HUD: \(model.hudOn ? "on" : "off")") { model.toggleHud() }
-                ChipButton(label: "Camera card") { model.openGallery() }
-                ChipButton(label: "Diagnostics") { model.runDiagnostics() }
             }
+            .padding(.horizontal, 6)
+            .padding(.top, 6)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: columns),
+                      spacing: 4) {
+                switch model.panelTab {
+                case 0:
+                    ForEach(MonitorViewModel.settings) { setting in
+                        ChipButton(label: model.chipLabels[setting.id] ?? setting.id,
+                                   active: model.strip?.owner == setting.id) {
+                            model.toggleStrip(for: setting)
+                        }
+                    }
+                    ChipButton(label: model.chipLabels["EV"] ?? "EV",
+                               active: model.strip?.owner == "EV") { model.toggleEvStrip() }
+                    ChipButton(label: model.chipLabels["WB"] ?? "WB",
+                               active: model.strip?.owner == "WB") { model.toggleWbStrip() }
+                    ChipButton(label: model.chipLabels["MODE"] ?? "Mode",
+                               active: model.strip?.owner == "MODE") { model.toggleModeStrip() }
+                    ZoomChip(label: "Z− (W)", direction: "out", model: model)
+                    ZoomChip(label: "Z+ (T)", direction: "in", model: model)
+                case 1:
+                    ChipButton(label: "Rot: \(model.rotation)°") { model.cycleRotation() }
+                    ChipButton(label: "Mirror: \(model.mirror ? "on" : "off")",
+                               active: model.mirror) { model.toggleMirror() }
+                    ChipButton(label: "Grid: \(model.grid.label)", active: model.grid != .off) {
+                        model.cycleGrid()
+                    }
+                    ChipButton(label: "Meter: \(model.meterOn ? "on" : "off")",
+                               active: model.meterOn) { model.toggleMeter() }
+                    ChipButton(label: "Peak: \(model.peakingColor.label)",
+                               active: model.peakingColor != .off) { model.cyclePeakingColor() }
+                    ChipButton(label: "Peak sens: \(model.peakingSensitivity.shortLabel)") {
+                        model.cyclePeakingSensitivity()
+                    }
+                    ChipButton(label: "HUD: \(model.hudOn ? "on" : "off")",
+                               active: model.hudOn) { model.toggleHud() }
+                default:
+                    ChipButton(label: "WiFi") { model.showConnectHelp = true }
+                    ChipButton(label: "Camera card") { model.openGallery() }
+                    ChipButton(label: "Diagnostics") { model.runDiagnostics() }
+                }
+            }
+            .frame(height: CGFloat(reservedRows * 42 - 4), alignment: .top)
             .padding(6)
         }
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(red: 0.06, green: 0.075, blue: 0.095).opacity(0.96))
+        )
+    }
+}
+
+struct PanelTabButton: View {
+    let label: String
+    let active: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: active ? .bold : .medium))
+                .foregroundColor(active ? accentGreen : .white.opacity(0.75))
+                .frame(maxWidth: .infinity, minHeight: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(active ? Color(red: 0.08, green: 0.23, blue: 0.18) : .clear)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(active ? accentGreen.opacity(0.9) : .clear, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -337,12 +392,22 @@ struct ChipButton: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 12, weight: active ? .bold : .regular))
+                .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .foregroundColor(active ? accentGreen : .white)
+                .foregroundColor(active ? Color(red: 0.3, green: 1, blue: 0.64) : .white.opacity(0.88))
                 .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: 0.14)))
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(active
+                              ? Color(red: 0.08, green: 0.23, blue: 0.18)
+                              : Color(red: 0.12, green: 0.14, blue: 0.17))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(active ? accentGreen.opacity(0.85) : Color.white.opacity(0.12),
+                                        lineWidth: 1)
+                        )
+                )
         }
         .buttonStyle(.plain)
     }
@@ -357,12 +422,22 @@ struct ZoomChip: View {
 
     var body: some View {
         Text(label)
-            .font(.system(size: 12, weight: pressing ? .bold : .regular))
+            .font(.system(size: 12, weight: .semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .foregroundColor(pressing ? accentGreen : .white)
+            .foregroundColor(pressing ? accentGreen : .white.opacity(0.88))
             .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: 0.14)))
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(pressing
+                          ? Color(red: 0.08, green: 0.23, blue: 0.18)
+                          : Color(red: 0.12, green: 0.14, blue: 0.17))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(pressing ? accentGreen.opacity(0.85) : Color.white.opacity(0.12),
+                                    lineWidth: 1)
+                    )
+            )
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in

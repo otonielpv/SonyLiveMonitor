@@ -1,5 +1,39 @@
 # Release notes
 
+## v0.7
+
+**New**
+
+- **Mirror preview on Android and iOS** — the live monitor can now be flipped
+  horizontally for selfie/vlogging use. It affects only the phone preview, not
+  the camera recording. Focus peaking follows the mirrored image and touch-focus
+  coordinates remain accurate at every screen rotation.
+- **Scalable tabbed controls** — the panel is split into *Camera*, *View* and
+  *App* groups instead of showing every control at once. The selected tab is
+  remembered and the layout continues to adapt between portrait and landscape.
+- **Modern control design** — compact rounded cards, a segmented tab selector,
+  clear green active states and a circular floating shutter replace the legacy
+  platform buttons. Every tab reserves the same panel size, so switching groups
+  no longer makes the live-view image resize.
+
+**Notes**
+
+- Mirror mode and the selected control tab are persisted independently on each
+  device.
+- This update only changes the Android and iOS phone apps. The patched camera APK
+  used for card browsing and RAW support is unchanged.
+
+**Downloads**
+
+- `SonyLiveMonitor-v0.7.apk` — Android phone app.
+- `SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk` — unchanged patched
+  camera app (install on the **camera** with PMCA-RE, not on the phone).
+- `SonyLiveMonitor-v0.7-unsigned.ipa` — iOS, sideload with AltStore.
+
+See the [install guide](https://github.com/otonielpv/SonyLiveMonitor/blob/main/docs/a6000-live-monitor-guide.md).
+
+---
+
 ## v0.6
 
 **Improved**
