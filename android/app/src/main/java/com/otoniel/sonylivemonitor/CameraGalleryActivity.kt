@@ -100,6 +100,10 @@ class CameraGalleryActivity : Activity() {
     private var selectMode = false
     private var deleteSupported = false
     private var wifiLock: WifiManager.WifiLock? = null
+    private var insetLeft = 0
+    private var insetTop = 0
+    private var insetRight = 0
+    private var insetBottom = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -138,13 +142,55 @@ class CameraGalleryActivity : Activity() {
     // sigue en Contents Transfer y solo hay que reajustar el tamano de las miniaturas.
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val size = resources.displayMetrics.widthPixels / grid.columnCount - 16
+        resizeThumbnails()
+    }
+
+    private fun thumbnailSize(): Int {
+        val availWidth = (resources.displayMetrics.widthPixels - insetLeft - insetRight)
+            .coerceAtLeast(grid.columnCount * 32)
+        return availWidth / grid.columnCount - 16
+    }
+
+    private fun resizeThumbnails() {
+        if (!::grid.isInitialized) return
+        val size = thumbnailSize()
         for (i in 0 until grid.childCount) {
             val child = grid.getChildAt(i)
             child.layoutParams = (child.layoutParams as GridLayout.LayoutParams).apply {
                 width = size; height = size
             }
         }
+    }
+
+    private fun extractSafeInsets(insets: android.view.WindowInsets): IntArray {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val sys = insets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars())
+            val cutout = insets.getInsets(android.view.WindowInsets.Type.displayCutout())
+            return intArrayOf(
+                maxOf(sys.left, cutout.left),
+                maxOf(sys.top, cutout.top),
+                maxOf(sys.right, cutout.right),
+                maxOf(sys.bottom, cutout.bottom),
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            @Suppress("DEPRECATION")
+            val cutout = insets.displayCutout
+            @Suppress("DEPRECATION")
+            return intArrayOf(
+                maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0),
+                maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0),
+                maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0),
+                maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0),
+            )
+        }
+        @Suppress("DEPRECATION")
+        return intArrayOf(
+            insets.systemWindowInsetLeft,
+            insets.systemWindowInsetTop,
+            insets.systemWindowInsetRight,
+            insets.systemWindowInsetBottom,
+        )
     }
 
     private fun buildUi(): View {
@@ -194,6 +240,14 @@ class CameraGalleryActivity : Activity() {
             addView(top); addView(actions); addView(more, LinearLayout.LayoutParams(-1, -2))
             addView(ScrollView(this@CameraGalleryActivity).apply { addView(grid) },
                 LinearLayout.LayoutParams(-1, 0, 1f))
+            setOnApplyWindowInsetsListener { v, insets ->
+                val (l, t, r, b) = extractSafeInsets(insets)
+                val widthChanged = l != insetLeft || r != insetRight
+                insetLeft = l; insetTop = t; insetRight = r; insetBottom = b
+                v.setPadding(l, t, r, b)
+                if (widthChanged) resizeThumbnails()
+                insets
+            }
         }
     }
 
@@ -331,7 +385,7 @@ class CameraGalleryActivity : Activity() {
 
     private fun addThumbnail(item: CameraImage) {
         images.add(item)
-        val size = resources.displayMetrics.widthPixels / grid.columnCount - 16
+        val size = thumbnailSize()
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(Color.DKGRAY)
             contentDescription = item.created
@@ -450,12 +504,14 @@ class CameraGalleryActivity : Activity() {
         }
         val spinner = ProgressBar(this)
         val title = TextView(this).apply {
-            textSize = 17f; setTextColor(Color.WHITE); setPadding(20, 18, 20, 18)
+            textSize = 17f; setTextColor(Color.WHITE)
+            setPadding(20 + insetLeft, 18 + insetTop, 20 + insetRight, 18)
             setBackgroundColor(Color.argb(180, 0, 0, 0))
         }
         val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
         val actions = LinearLayout(this).apply {
-            gravity = Gravity.CENTER; setPadding(8, 8, 8, 8)
+            gravity = Gravity.CENTER
+            setPadding(8 + insetLeft, 8, 8 + insetRight, 8 + insetBottom)
             setBackgroundColor(Color.argb(200, 0, 0, 0))
         }
         fun render() {
@@ -511,6 +567,12 @@ class CameraGalleryActivity : Activity() {
             addView(spinner, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
             addView(title, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
             addView(actions, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            setOnApplyWindowInsetsListener { _, insets ->
+                val (l, t, r, b) = extractSafeInsets(insets)
+                title.setPadding(20 + l, 18 + t, 20 + r, 18)
+                actions.setPadding(8 + l, 8, 8 + r, 8 + b)
+                insets
+            }
         }
         dialog.setContentView(frame); dialog.show()
         render()
