@@ -1,5 +1,28 @@
 # Release notes
 
+## v0.12
+
+**Fixed**
+
+- Android: the UI no longer hides behind the camera cutout or the navigation
+  bar on edge-to-edge devices (Android 15+). In the gallery, the action buttons
+  and the download dialog stay clear of the system bars, and thumbnails resize
+  to the usable width (#2, thanks @KennyMusterer in #3).
+- Android live view: the HUD, exposure meter, video framing and draggable
+  shutter respect the display cutout. The system bars stay hidden in immersive
+  mode, so no permanent margins are reserved for them.
+
+**Downloads**
+
+- `SonyLiveMonitor-Installer-v0.12-windows.exe` — desktop installer (Windows).
+- `SonyLiveMonitor-Installer-v0.12-macos.dmg` — desktop installer (macOS).
+- `SonyLiveMonitor-Installer-v0.12-linux` — desktop installer (Linux).
+- `SonyLiveMonitor-v0.12.apk` — Android phone app.
+- `SonyLiveMonitor-v0.12-unsigned.ipa` — iOS/iPadOS, sideload with AltStore.
+- `SonyLiveMonitor-a6000-avcontent-ONLY-FOR-CAMERA.apk` — unchanged patched
+  camera app (do **not** install it on the phone).
+- `SmartRemote-a6000-original-v4.30.apk` — Sony's original camera app.
+
 ## v0.11
 
 **New**
