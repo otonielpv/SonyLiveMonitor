@@ -137,10 +137,11 @@ class MainActivity : Activity() {
     private val frameSrcCorners = FloatArray(8)
     private val frameDstCorners = FloatArray(8)
 
-    // Zonas ocupadas por las barras de botones (medidas tras el layout),
-    // para que HUD y medidor no se solapen con ellas en ninguna orientacion
-    @Volatile private var topBarBottom = 0
-    @Volatile private var topBarLeft = Int.MAX_VALUE
+    // Margenes seguros frente al agujero de camara (cutout) y barras del sistema
+    @Volatile private var safeInsetLeft = 0
+    @Volatile private var safeInsetTop = 0
+    @Volatile private var safeInsetRight = 0
+    @Volatile private var safeInsetBottom = 0
 
     // Hueco que el panel de control resta al area de video
     @Volatile private var videoBottomInset = 0
@@ -149,6 +150,7 @@ class MainActivity : Activity() {
     private lateinit var panel: LinearLayout
     private lateinit var panelContainer: ScrollView
     private lateinit var panelFrame: FrameLayout
+    private var placeShutterButton: (() -> Unit)? = null
     private lateinit var controlGrid: GridLayout
     // Chips agrupados por pestana del panel: Camera / View / App
     private val cameraChips = mutableListOf<Button>()
@@ -342,6 +344,7 @@ class MainActivity : Activity() {
         root.addView(surface)
         root.addView(buildBottomBar())
         root.addView(buildShutterButton())
+        applyWindowInsets(root)
         setContentView(root)
         hideSystemBars()
     }
@@ -496,6 +499,46 @@ class MainActivity : Activity() {
     }
 
     /**
+     * Lee los margenes del agujero de camara (display cutout) para evitar que el
+     * panel, el disparador o el HUD queden ocultos tras el (edge-to-edge en
+     * Android 15+). Las barras del sistema no se reservan: esta pantalla las
+     * oculta en modo inmersivo y reservarlas dejaria franjas negras fijas.
+     */
+    private fun applyWindowInsets(root: View) {
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val left: Int
+            val top: Int
+            val right: Int
+            val bottom: Int
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val cutout = insets.getInsets(android.view.WindowInsets.Type.displayCutout())
+                left = cutout.left
+                top = cutout.top
+                right = cutout.right
+                bottom = cutout.bottom
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val cutout = insets.displayCutout
+                left = cutout?.safeInsetLeft ?: 0
+                top = cutout?.safeInsetTop ?: 0
+                right = cutout?.safeInsetRight ?: 0
+                bottom = cutout?.safeInsetBottom ?: 0
+            } else {
+                left = 0; top = 0; right = 0; bottom = 0
+            }
+            safeInsetLeft = left
+            safeInsetTop = top
+            safeInsetRight = right
+            safeInsetBottom = bottom
+            if (::panelFrame.isInitialized) {
+                panelFrame.setPadding(left, top, right, bottom)
+            }
+            updateVideoInsets()
+            placeShutterButton?.invoke()
+            insets
+        }
+    }
+
+    /**
      * Disparador flotante y arrastrable: toque corto dispara, arrastrar lo
      * recoloca. La posicion se recuerda por orientacion (vertical/horizontal).
      */
@@ -533,14 +576,19 @@ class MainActivity : Activity() {
         fun place() {
             if (frame.width == 0) return
             val prefs = getPreferences(MODE_PRIVATE)
-            val defX = frame.width - b.width - 16
-            val defY = (frame.height - b.height) / 2
+            val minX = safeInsetLeft
+            val minY = safeInsetTop
+            val maxX = maxOf(minX, frame.width - safeInsetRight - b.width)
+            val maxY = maxOf(minY, frame.height - safeInsetBottom - b.height)
+            val defX = maxOf(minX, frame.width - maxOf(videoRightInset, safeInsetRight) - b.width - 16)
+            val defY = (minY + maxOf(minY, frame.height - maxOf(videoBottomInset, safeInsetBottom) - b.height)) / 2
             lp.leftMargin = prefs.getInt("shutter_${orientKey()}_x", defX)
-                .coerceIn(0, maxOf(0, frame.width - b.width))
+                .coerceIn(minX, maxX)
             lp.topMargin = prefs.getInt("shutter_${orientKey()}_y", defY)
-                .coerceIn(0, maxOf(0, frame.height - b.height))
+                .coerceIn(minY, maxY)
             b.layoutParams = lp
         }
+        placeShutterButton = ::place
 
         frame.addOnLayoutChangeListener { _, l, t, r, bo, ol, ot, or_, ob ->
             if (r - l != or_ - ol || bo - t != ob - ot) frame.post { place() }
@@ -565,8 +613,12 @@ class MainActivity : Activity() {
                     val dy = ev.rawY - downY
                     if (dragged || Math.abs(dx) > 24 || Math.abs(dy) > 24) {
                         dragged = true
-                        lp.leftMargin = (startLeft + dx).toInt().coerceIn(0, maxOf(0, frame.width - v.width))
-                        lp.topMargin = (startTop + dy).toInt().coerceIn(0, maxOf(0, frame.height - v.height))
+                        val minX = safeInsetLeft
+                        val minY = safeInsetTop
+                        val maxX = maxOf(minX, frame.width - safeInsetRight - v.width)
+                        val maxY = maxOf(minY, frame.height - safeInsetBottom - v.height)
+                        lp.leftMargin = (startLeft + dx).toInt().coerceIn(minX, maxX)
+                        lp.topMargin = (startTop + dy).toInt().coerceIn(minY, maxY)
                         v.layoutParams = lp
                     }
                     true
@@ -832,15 +884,23 @@ class MainActivity : Activity() {
         updateVideoInsets()
     }
 
-    /** El video se encaja en el hueco libre que deja el panel. */
+    /** El video se encaja en el hueco libre que deja el panel y las barras/cutout. */
     private fun updateVideoInsets() {
         val portrait = resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
         if (portrait) {
-            videoBottomInset = if (panelContainer.height > 0) panelFrame.height - panelContainer.top else 0
-            videoRightInset = 0
+            videoBottomInset = if (panelContainer.height > 0) {
+                maxOf(panelFrame.height - panelContainer.top, panelContainer.height + safeInsetBottom)
+            } else {
+                safeInsetBottom
+            }
+            videoRightInset = safeInsetRight
         } else {
-            videoBottomInset = 0
-            videoRightInset = if (panelContainer.width > 0) panelFrame.width - panelContainer.left else 0
+            videoBottomInset = safeInsetBottom
+            videoRightInset = if (panelContainer.width > 0) {
+                maxOf(panelFrame.width - panelContainer.left, panelContainer.width + safeInsetRight)
+            } else {
+                safeInsetRight
+            }
         }
     }
 
@@ -2035,11 +2095,15 @@ class MainActivity : Activity() {
         try {
             canvas.drawColor(Color.BLACK)
             if (bitmap != null) {
-                // Area libre: la pantalla menos el hueco del panel de control
-                val freeW = (canvas.width - videoRightInset).toFloat()
-                val freeH = (canvas.height - videoBottomInset).toFloat()
-                val cx = freeW / 2f
-                val cy = freeH / 2f
+                // Area libre: la pantalla menos el hueco del panel de control y cutouts/barras
+                val freeLeft = safeInsetLeft.toFloat()
+                val freeTop = safeInsetTop.toFloat()
+                val freeRight = (canvas.width - maxOf(videoRightInset, safeInsetRight)).toFloat()
+                val freeBottom = (canvas.height - maxOf(videoBottomInset, safeInsetBottom)).toFloat()
+                val freeW = maxOf(1f, freeRight - freeLeft)
+                val freeH = maxOf(1f, freeBottom - freeTop)
+                val cx = freeLeft + freeW / 2f
+                val cy = freeTop + freeH / 2f
                 // Con 90/270 grados el encaje se calcula con los ejes intercambiados
                 val swap = rotation % 180 != 0
                 val availW = if (swap) freeH else freeW
@@ -2092,19 +2156,16 @@ class MainActivity : Activity() {
                 drawFocusMarker(canvas)
                 if (exposure != null) drawMeter(canvas, exposure)
             }
-            var hudY = 48f
+            val hudX = 24f + safeInsetLeft
+            var hudY = 48f + safeInsetTop
             if (hudOn) {
                 val hud = if (ageMs >= 0) {
                     "%.1f fps | age %d ms | drops %d".format(fps, ageMs, dropped)
                 } else {
                     "%.1f fps | drops %d".format(fps, dropped)
                 }
-                // Si la barra superior invade la esquina del HUD (movil en
-                // vertical), el HUD baja hasta quedar por debajo de ella
-                val hudWidth = hudPaint.measureText(hud) + 48f
-                hudY = if (topBarLeft < hudWidth) topBarBottom + 44f else 48f
-                canvas.drawText(hud, 24f, hudY, hudShadow)
-                canvas.drawText(hud, 24f, hudY, hudPaint)
+                canvas.drawText(hud, hudX, hudY, hudShadow)
+                canvas.drawText(hud, hudX, hudY, hudPaint)
                 // Segunda linea: salud del WiFi de la camara (si hay lectura)
                 if (wifiRssi != 0) {
                     val quality = when {
@@ -2119,18 +2180,16 @@ class MainActivity : Activity() {
                         wifiRssi >= -70 -> Color.rgb(255, 200, 0)   // ambar
                         else -> Color.rgb(255, 80, 80)              // rojo
                     }
-                    canvas.drawText(wifiLine, 24f, hudY + 40f, hudShadow)
-                    canvas.drawText(wifiLine, 24f, hudY + 40f, wifiPaint)
+                    canvas.drawText(wifiLine, hudX, hudY + 40f, hudShadow)
+                    canvas.drawText(wifiLine, hudX, hudY + 40f, wifiPaint)
                     hudY += 40f  // el alert/zoom bajan para no solaparse
                 }
-            } else if (alert != null) {
-                hudY = if (topBarLeft < alertPaint.measureText(alert) + 48f) topBarBottom + 44f else 48f
             }
-            if (alert != null) canvas.drawText(alert, 24f, hudY + 56f, alertPaint)
+            if (alert != null) canvas.drawText(alert, hudX, hudY + 56f, alertPaint)
             zoomText?.let {
                 if (SystemClock.elapsedRealtime() < zoomTextUntil) {
-                    canvas.drawText(it, 24f, hudY + 100f, hudShadow)
-                    canvas.drawText(it, 24f, hudY + 100f, hudPaint)
+                    canvas.drawText(it, hudX, hudY + 100f, hudShadow)
+                    canvas.drawText(it, hudX, hudY + 100f, hudPaint)
                 } else {
                     zoomText = null
                 }
@@ -2245,9 +2304,9 @@ class MainActivity : Activity() {
     private fun drawMeter(canvas: Canvas, exposure: Exposure) {
         val w = 340f
         val h = 130f
-        val left = 24f
-        // Siempre dentro del area de video, por encima del panel
-        val bottom = canvas.height - videoBottomInset - 16f
+        val left = 24f + safeInsetLeft
+        // Siempre dentro del area de video, por encima del panel y barra inferior
+        val bottom = canvas.height - maxOf(videoBottomInset, safeInsetBottom) - 16f
         val top = bottom - h
         canvas.drawRect(left, top, left + w, bottom, meterBgPaint)
 
@@ -2281,9 +2340,10 @@ class MainActivity : Activity() {
             ?: return
         try {
             canvas.drawColor(Color.BLACK)
-            val baseY = maxOf(64f, topBarBottom + 52f)
+            val baseX = 24f + safeInsetLeft
+            val baseY = 64f + safeInsetTop
             message.split("\n").forEachIndexed { i, line ->
-                canvas.drawText(line, 24f, baseY + i * 52f, alertPaint)
+                canvas.drawText(line, baseX, baseY + i * 52f, alertPaint)
             }
         } finally {
             holder.unlockCanvasAndPost(canvas)
