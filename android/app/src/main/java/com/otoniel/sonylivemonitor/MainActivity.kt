@@ -150,7 +150,6 @@ class MainActivity : Activity() {
     private lateinit var panel: LinearLayout
     private lateinit var panelContainer: ScrollView
     private lateinit var panelFrame: FrameLayout
-    private lateinit var shutterFrame: FrameLayout
     private var placeShutterButton: (() -> Unit)? = null
     private lateinit var controlGrid: GridLayout
     // Chips agrupados por pestana del panel: Camera / View / App
@@ -500,9 +499,10 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Lee los margenes del agujero de camara (display cutout) y de las barras
-     * de navegacion/estado para evitar que el panel, el disparador o el HUD
-     * queden ocultos tras ellos (especialmente con edge-to-edge en Android 15+).
+     * Lee los margenes del agujero de camara (display cutout) para evitar que el
+     * panel, el disparador o el HUD queden ocultos tras el (edge-to-edge en
+     * Android 15+). Las barras del sistema no se reservan: esta pantalla las
+     * oculta en modo inmersivo y reservarlas dejaria franjas negras fijas.
      */
     private fun applyWindowInsets(root: View) {
         root.setOnApplyWindowInsetsListener { _, insets ->
@@ -511,32 +511,19 @@ class MainActivity : Activity() {
             val right: Int
             val bottom: Int
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val sys = insets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars())
                 val cutout = insets.getInsets(android.view.WindowInsets.Type.displayCutout())
-                left = maxOf(sys.left, cutout.left)
-                top = maxOf(sys.top, cutout.top)
-                right = maxOf(sys.right, cutout.right)
-                bottom = maxOf(sys.bottom, cutout.bottom)
+                left = cutout.left
+                top = cutout.top
+                right = cutout.right
+                bottom = cutout.bottom
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                @Suppress("DEPRECATION")
                 val cutout = insets.displayCutout
-                @Suppress("DEPRECATION")
-                left = maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0)
-                @Suppress("DEPRECATION")
-                top = maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0)
-                @Suppress("DEPRECATION")
-                right = maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0)
-                @Suppress("DEPRECATION")
-                bottom = maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0)
+                left = cutout?.safeInsetLeft ?: 0
+                top = cutout?.safeInsetTop ?: 0
+                right = cutout?.safeInsetRight ?: 0
+                bottom = cutout?.safeInsetBottom ?: 0
             } else {
-                @Suppress("DEPRECATION")
-                left = insets.systemWindowInsetLeft
-                @Suppress("DEPRECATION")
-                top = insets.systemWindowInsetTop
-                @Suppress("DEPRECATION")
-                right = insets.systemWindowInsetRight
-                @Suppress("DEPRECATION")
-                bottom = insets.systemWindowInsetBottom
+                left = 0; top = 0; right = 0; bottom = 0
             }
             safeInsetLeft = left
             safeInsetTop = top
@@ -557,7 +544,6 @@ class MainActivity : Activity() {
      */
     private fun buildShutterButton(): View {
         val frame = FrameLayout(this)
-        shutterFrame = frame
         val shutterSize = (68 * resources.displayMetrics.density).toInt()
         val lp = FrameLayout.LayoutParams(
             shutterSize, shutterSize,
